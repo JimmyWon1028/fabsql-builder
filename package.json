@@ -1,0 +1,34 @@
+{
+  "name": "fabsql-builder",
+  "private": true,
+  "version": "0.1.0",
+  "productName": "FabSQL Builder",
+  "main": "desktop/main.cjs",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "node scripts/clean-distribution.mjs && npm run build -w @sql-builder/shared && npm run build -w @sql-builder/web && npm run build -w @sql-builder/api && node scripts/prepare-distribution.mjs && npm install --omit=dev --prefix dist --package-lock=false --bin-links=false",
+    "dev:api": "npm run build -w @sql-builder/shared && npm run dev -w @sql-builder/api",
+    "dev:web": "npm run build -w @sql-builder/shared && npm run dev -w @sql-builder/web",
+    "electron:make": "npm run build && install-electron --no && node scripts/package-electron.mjs --make",
+    "electron:make:windows-arm64": "npm run build && install-electron --no && node scripts/package-electron.mjs --windows-arm64 --make",
+    "electron:make:windows-x64": "npm run build && install-electron --no && node scripts/package-electron.mjs --windows-x64 --make",
+    "electron:package": "npm run build && install-electron --no && node scripts/package-electron.mjs",
+    "electron:package:windows-arm64": "npm run build && install-electron --no && node scripts/package-electron.mjs --windows-arm64",
+    "electron:package:windows-x64": "npm run build && install-electron --no && node scripts/package-electron.mjs --windows-x64",
+    "electron:start": "npm run build && install-electron --no && electron .",
+    "start": "node dist/start.mjs",
+    "test": "node --test tests/*.test.cjs && npm run build -w @sql-builder/shared && npm run test -w @sql-builder/api",
+    "typecheck": "npm run build -w @sql-builder/shared && npm run typecheck -w @sql-builder/web && npm run typecheck -w @sql-builder/api"
+  },
+  "devDependencies": {
+    "@electron/packager": "20.0.4",
+    "electron": "43.2.0",
+    "typescript": "5.9.3"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "name": "@sql-builder/web",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "build": "vue-tsc --noEmit && vite build",
+    "dev": "vite --host 127.0.0.1",
+    "typecheck": "vue-tsc --noEmit"
+  },
+  "dependencies": {
+    "@sql-builder/shared": "*",
+    "vue": "3.5.40"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "6.0.8",
+    "typescript": "5.9.3",
+    "vite": "8.1.5",
+    "vue-tsc": "3.3.8"
+  }
+}
