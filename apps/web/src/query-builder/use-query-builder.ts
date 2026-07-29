@@ -1,5 +1,6 @@
 import type {
   CanvasPosition,
+  FilterCondition,
   FilterGroup,
   GroupingField,
   QueryJoin,
@@ -13,6 +14,7 @@ import {
   cloneQueryData,
   cloneQueryModel,
   createEmptyQueryModel,
+  queryExpressionReferencesTable,
   QueryHistory
 } from '@sql-builder/shared'
 import {
@@ -37,7 +39,8 @@ function removeFilterTableReferences(
     ...group,
     children: group.children
       .filter((node) =>
-        node.kind === 'group' || node.field.tableId !== tableId
+        node.kind === 'group'
+        || !filterConditionReferencesTable(node, tableId)
       )
       .map((node) =>
         node.kind === 'group'
@@ -47,12 +50,81 @@ function removeFilterTableReferences(
   }
 }
 
+function filterConditionReferencesTable(
+  condition: FilterCondition,
+  tableId: string
+): boolean {
+  return (
+    condition.expression
+      ? queryExpressionReferencesTable(condition.expression, tableId)
+      : condition.field.tableId === tableId
+  )
+    || (
+      condition.rightExpression !== undefined
+      && queryExpressionReferencesTable(
+        condition.rightExpression,
+        tableId
+      )
+    )
+}
+
+function filterGroupReferencesTable(
+  group: FilterGroup,
+  tableId: string
+): boolean {
+  return group.children.some((node) =>
+    node.kind === 'group'
+      ? filterGroupReferencesTable(node, tableId)
+      : filterConditionReferencesTable(node, tableId)
+  )
+}
+
 export function useQueryBuilder() {
   const initialModel = createEmptyQueryModel()
   const history = new QueryHistory(initialModel, cloneQueryModel)
   const model = shallowRef<QueryModel>(history.current)
+  const activeQueryPath = ref<string[]>([])
   const historyVersion = ref(0)
   const savedAt = ref<Date | null>(null)
+  const activeModel = computed(() =>
+    resolveQueryModel(model.value, activeQueryPath.value) ?? model.value
+  )
+  const queryBreadcrumbs = computed(() => {
+    const breadcrumbs: Array<{ tableId: string, label: string }> = []
+    let currentModel = model.value
+
+    for (const tableId of activeQueryPath.value) {
+      const table = currentModel.tables.find((item) => item.id === tableId)
+
+      if (table?.source?.kind === 'subquery') {
+        breadcrumbs.push({
+          tableId,
+          label: table.alias || table.name
+        })
+        currentModel = table.source.query
+        continue
+      }
+
+      const operationIndex = currentModel.setOperations?.findIndex(
+        (operation) => operation.id === tableId
+      ) ?? -1
+      const operation = operationIndex >= 0
+        ? currentModel.setOperations?.[operationIndex]
+        : undefined
+
+      if (!operation) {
+        break
+      }
+
+      breadcrumbs.push({
+        tableId,
+        label: `${operation.operator} ${operationIndex + 2}`
+      })
+      currentModel = operation.query
+    }
+
+    return breadcrumbs
+  })
 
   const canUndo = computed(() => {
     historyVersion.value
@@ -63,20 +135,75 @@ export function useQueryBuilder() {
     return history.canRedo
   })
 
+  function resolveQueryModel(
+    rootModel: QueryModel,
+    path: string[]
+  ): QueryModel | null {
+    let currentModel = rootModel
+
+    for (const tableId of path) {
+      const table = currentModel.tables.find((item) => item.id === tableId)
+
+      if (table?.source?.kind === 'subquery') {
+        currentModel = table.source.query
+        continue
+      }
+
+      const operation = currentModel.setOperations?.find(
+        (item) => item.id === tableId
+      )
+
+      if (!operation) {
+        return null
+      }
+
+      currentModel = operation.query
+    }
+
+    return currentModel
+  }
+
+  function ensureActiveQueryPath(): void {
+    if (!resolveQueryModel(model.value, activeQueryPath.value)) {
+      activeQueryPath.value = []
+    }
+  }
+
   function syncHistory(nextModel: QueryModel): void {
     model.value = history.commit(nextModel)
     historyVersion.value += 1
+    ensureActiveQueryPath()
   }
 
-  function mutate(mutator: (draft: QueryModel) => void): void {
+  function mutate(
+    mutator: (draft: QueryModel) => void,
+    preserveSourceSql = false
+  ): void {
     const draft = cloneQueryModel(model.value)
-    mutator(draft)
+
+    if (!preserveSourceSql) {
+      delete draft.sourceSql
+    }
+
+    const targetModel = resolveQueryModel(draft, activeQueryPath.value)
+
+    if (!targetModel) {
+      activeQueryPath.value = []
+      mutator(draft)
+    } else {
+      if (!preserveSourceSql) {
+        delete targetModel.sourceSql
+      }
+
+      mutator(targetModel)
+    }
+
     syncHistory(draft)
   }
 
   function createAlias(tableName: string): string {
     const aliases = new Set(
-      model.value.tables.map((table) =>
+      activeModel.value.tables.map((table) =>
         table.alias.toLocaleLowerCase('en-US')
       )
     )
@@ -115,7 +242,9 @@ export function useQueryBuilder() {
   }
 
   function updateTableAlias(tableId: string, alias: string): void {
-    const table = model.value.tables.find((item) => item.id === tableId)
+    const table = activeModel.value.tables.find(
+      (item) => item.id === tableId
+    )
 
     if (!table || table.alias === alias) {
       return
@@ -131,7 +260,9 @@ export function useQueryBuilder() {
   }
 
   function moveTable(tableId: string, position: CanvasPosition): void {
-    const table = model.value.tables.find((item) => item.id === tableId)
+    const table = activeModel.value.tables.find(
+      (item) => item.id === tableId
+    )
 
     if (
       table
@@ -147,29 +278,40 @@ export function useQueryBuilder() {
       if (draftTable) {
         draftTable.position = cloneQueryData(position)
       }
-    })
+    }, true)
   }
 
   function removeTable(tableId: string): void {
-    if (!model.value.tables.some((table) => table.id === tableId)) {
+    if (!activeModel.value.tables.some((table) => table.id === tableId)) {
       return
     }
 
     mutate((draft) => {
       draft.tables = draft.tables.filter((table) => table.id !== tableId)
       draft.selectedFields = draft.selectedFields.filter(
-        (field) => field.field.tableId !== tableId
+        (field) =>
+          field.expression
+            ? !queryExpressionReferencesTable(field.expression, tableId)
+            : field.field.tableId !== tableId
       )
       draft.joins = draft.joins.filter(
         (join) =>
-          join.left.tableId !== tableId && join.right.tableId !== tableId
+          join.left.tableId !== tableId
+          && join.right.tableId !== tableId
+          && (
+            !join.conditions
+            || !filterGroupReferencesTable(join.conditions, tableId)
+          )
       )
       draft.filters = removeFilterTableReferences(draft.filters, tableId)
       draft.grouping = draft.grouping.filter(
         (item) => item.field.tableId !== tableId
       )
       draft.sorting = draft.sorting.filter(
-        (item) => item.field.tableId !== tableId
+        (item) =>
+          item.expression
+            ? !queryExpressionReferencesTable(item.expression, tableId)
+            : item.field.tableId !== tableId
       )
     })
   }
@@ -178,8 +320,10 @@ export function useQueryBuilder() {
     tableId: string,
     columnName: string
   ): SelectedField {
-    const existingField = model.value.selectedFields.find(
+    const existingField = activeModel.value.selectedFields.find(
       (field) =>
+        !field.expression
+        &&
         field.field.tableId === tableId
         && field.field.columnName === columnName
     )
@@ -211,8 +355,10 @@ export function useQueryBuilder() {
     columnName: string,
     selected: boolean
   ): void {
-    const matchingFields = model.value.selectedFields.filter(
+    const matchingFields = activeModel.value.selectedFields.filter(
       (field) =>
+        !field.expression
+        &&
         field.field.tableId === tableId
         && field.field.columnName === columnName
     )
@@ -233,6 +379,8 @@ export function useQueryBuilder() {
     mutate((draft) => {
       draft.selectedFields = draft.selectedFields.filter(
         (field) =>
+          field.expression !== undefined
+          ||
           field.field.tableId !== tableId
           || field.field.columnName !== columnName
       )
@@ -242,7 +390,7 @@ export function useQueryBuilder() {
   function updateSelectedField(
     selectedField: SelectedField
   ): void {
-    const currentField = model.value.selectedFields.find(
+    const currentField = activeModel.value.selectedFields.find(
       (item) => item.id === selectedField.id
     )
 
@@ -275,10 +423,10 @@ export function useQueryBuilder() {
     targetFieldId: string,
     placement: 'before' | 'after'
   ): void {
-    const sourceIndex = model.value.selectedFields.findIndex(
+    const sourceIndex = activeModel.value.selectedFields.findIndex(
       (item) => item.id === selectedFieldId
     )
-    const targetIndex = model.value.selectedFields.findIndex(
+    const targetIndex = activeModel.value.selectedFields.findIndex(
       (item) => item.id === targetFieldId
     )
 
@@ -317,8 +465,18 @@ export function useQueryBuilder() {
     })
   }
 
+  function setDistinct(distinct: boolean): void {
+    if (Boolean(activeModel.value.distinct) === distinct) {
+      return
+    }
+
+    mutate((draft) => {
+      draft.distinct = distinct
+    })
+  }
+
   function addJoin(join: Omit<QueryJoin, 'id'>): boolean {
-    const alreadyJoined = model.value.joins.some((existingJoin) =>
+    const alreadyJoined = activeModel.value.joins.some((existingJoin) =>
       (
         existingJoin.left.tableId === join.left.tableId
         && existingJoin.right.tableId === join.right.tableId
@@ -385,8 +543,8 @@ export function useQueryBuilder() {
 
   function setPagination(pagination: QueryPagination): void {
     if (
-      model.value.pagination.limit === pagination.limit
-      && model.value.pagination.offset === pagination.offset
+      activeModel.value.pagination.limit === pagination.limit
+      && activeModel.value.pagination.offset === pagination.offset
     ) {
       return
     }
@@ -399,21 +557,63 @@ export function useQueryBuilder() {
   function undo(): void {
     model.value = history.undo()
     historyVersion.value += 1
+    ensureActiveQueryPath()
   }
 
   function redo(): void {
     model.value = history.redo()
     historyVersion.value += 1
+    ensureActiveQueryPath()
   }
 
   function reset(): void {
+    activeQueryPath.value = []
     model.value = history.replace(createEmptyQueryModel())
     historyVersion.value += 1
   }
 
   function restore(nextModel: QueryModel): void {
+    activeQueryPath.value = []
     model.value = history.replace(nextModel)
     historyVersion.value += 1
+  }
+
+  function applyImportedModel(nextModel: QueryModel): void {
+    activeQueryPath.value = []
+    syncHistory(cloneQueryModel(nextModel))
+  }
+
+  function enterSubquery(tableId: string): boolean {
+    const table = activeModel.value.tables.find(
+      (item) => item.id === tableId
+    )
+
+    if (table?.source?.kind !== 'subquery') {
+      return false
+    }
+
+    activeQueryPath.value = [...activeQueryPath.value, tableId]
+    return true
+  }
+
+  function enterSetOperation(operationId: string): boolean {
+    if (
+      !activeModel.value.setOperations?.some(
+        (operation) => operation.id === operationId
+      )
+    ) {
+      return false
+    }
+
+    activeQueryPath.value = [...activeQueryPath.value, operationId]
+    return true
+  }
+
+  function navigateToQueryDepth(depth: number): void {
+    activeQueryPath.value = activeQueryPath.value.slice(
+      0,
+      Math.max(0, depth)
+    )
   }
 
   function clearSavedQuery(): void {
@@ -423,6 +623,9 @@ export function useQueryBuilder() {
 
   return {
     model,
+    activeModel,
+    activeQueryPath,
+    queryBreadcrumbs,
     canUndo,
     canRedo,
     savedAt,
@@ -434,6 +637,7 @@ export function useQueryBuilder() {
     setFieldSelected,
     updateSelectedField,
     reorderSelectedField,
+    setDistinct,
     setJoins,
     addJoin,
     setFilters,
@@ -446,6 +650,10 @@ export function useQueryBuilder() {
     redo,
     reset,
     restore,
+    applyImportedModel,
+    enterSubquery,
+    enterSetOperation,
+    navigateToQueryDepth,
     clearSavedQuery
   }
 }

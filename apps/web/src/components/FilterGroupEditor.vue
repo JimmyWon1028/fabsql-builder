@@ -3,7 +3,7 @@ import type {
   FilterCondition,
   FilterGroup,
   FilterOperator,
-  QueryParameterValue,
+  QueryFilterValue,
   QueryTable,
   SchemaColumn
 } from '@sql-builder/shared'
@@ -12,6 +12,9 @@ import { cloneQueryData } from '@sql-builder/shared'
 import {
   useApplicationPreferences
 } from '../preferences/use-application-preferences'
+import {
+  formatQueryExpression
+} from '../query-builder/format-query-expression'
 
 const props = defineProps<{
   group: FilterGroup
@@ -151,8 +154,27 @@ function updateConditionOperator(
 
 function valueForInput(condition: FilterCondition): string {
   return Array.isArray(condition.value)
-    ? condition.value.join(', ')
-    : String(condition.value ?? '')
+    ? condition.value.map(valueForEditor).join(', ')
+    : condition.value === undefined
+      ? ''
+      : valueForEditor(condition.value)
+}
+
+function valueForEditor(value: QueryFilterValue): string {
+  return typeof value === 'object' && value !== null
+    ? `@${value.name}`
+    : String(value ?? '')
+}
+
+function parseEditorValue(value: string): QueryFilterValue {
+  const parameterMatch = value.trim().match(/^@([A-Za-z_][A-Za-z0-9_]*)$/)
+
+  return parameterMatch
+    ? {
+        kind: 'parameter',
+        name: parameterMatch[1] ?? ''
+      }
+    : value
 }
 
 function updateConditionValue(index: number, value: string): void {
@@ -164,16 +186,17 @@ function updateConditionValue(index: number, value: string): void {
           .split(',')
           .map((item) => item.trim())
           .filter(Boolean)
-      : value
+          .map(parseEditorValue)
+      : parseEditorValue(value)
   })
 }
 
 function updateSecondValue(
   index: number,
-  value: QueryParameterValue
+  value: string
 ): void {
   updateCondition(index, (condition) => {
-    condition.secondValue = value
+    condition.secondValue = parseEditorValue(value)
   })
 }
 </script>
@@ -235,7 +258,15 @@ function updateSecondValue(
         v-if="node.kind === 'condition'"
         class="filter-condition"
       >
+        <code
+          v-if="node.expression"
+          class="filter-condition__expression"
+          :title="formatQueryExpression(node.expression, tables)"
+        >
+          {{ formatQueryExpression(node.expression, tables) }}
+        </code>
         <select
+          v-else
           :value="node.field.tableId"
           :aria-label="t('filters.table')"
           @change="updateConditionTable(
@@ -252,6 +283,7 @@ function updateSecondValue(
           </option>
         </select>
         <select
+          v-if="!node.expression"
           :value="node.field.columnName"
           :aria-label="t('filters.field')"
           @change="updateCondition(index, (condition) => {
@@ -283,8 +315,15 @@ function updateSecondValue(
             {{ operator }}
           </option>
         </select>
+        <code
+          v-if="node.rightExpression"
+          class="filter-condition__right-expression"
+          :title="formatQueryExpression(node.rightExpression, tables)"
+        >
+          {{ formatQueryExpression(node.rightExpression, tables) }}
+        </code>
         <input
-          v-if="node.operator !== 'IS NULL'
+          v-else-if="node.operator !== 'IS NULL'
             && node.operator !== 'IS NOT NULL'"
           :value="valueForInput(node)"
           type="text"
@@ -299,7 +338,9 @@ function updateSecondValue(
         >
         <input
           v-if="node.operator === 'BETWEEN'"
-          :value="String(node.secondValue ?? '')"
+          :value="node.secondValue === undefined
+            ? ''
+            : valueForEditor(node.secondValue)"
           type="text"
           :placeholder="t('filters.secondValue')"
           :aria-label="t('filters.secondValue')"

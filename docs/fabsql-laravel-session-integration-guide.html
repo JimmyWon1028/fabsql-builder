@@ -1,0 +1,1138 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta
+      name="description"
+      content="將 FabSQL Builder 整合至既有 Laravel ERP Session 的完整操作手冊"
+    >
+    <title>FabSQL Builder Laravel Session 整合手冊</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --background: #eef3f9;
+        --surface: #ffffff;
+        --surface-soft: #f6f9fd;
+        --border: #d8e1ed;
+        --border-strong: #b7c7db;
+        --text: #19324f;
+        --text-soft: #58708b;
+        --primary: #1367c4;
+        --primary-soft: #e9f3ff;
+        --success: #17734b;
+        --success-soft: #e9f8f0;
+        --warning: #9a6200;
+        --warning-soft: #fff6df;
+        --danger: #a63a3a;
+        --danger-soft: #fff0f0;
+        --code: #13263d;
+        --shadow: 0 18px 48px rgba(35, 64, 100, 0.1);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html {
+        scroll-behavior: smooth;
+      }
+
+      body {
+        margin: 0;
+        background:
+          radial-gradient(circle at top left, #dfeeff 0, transparent 26rem),
+          var(--background);
+        color: var(--text);
+        font-family:
+          Inter, "Noto Sans TC", "PingFang TC", "Microsoft JhengHei",
+          sans-serif;
+        line-height: 1.72;
+      }
+
+      a {
+        color: var(--primary);
+      }
+
+      code,
+      pre {
+        font-family:
+          "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+      }
+
+      code {
+        border-radius: 0.3rem;
+        background: #eaf0f7;
+        padding: 0.1rem 0.35rem;
+        color: #1c4e83;
+        font-size: 0.92em;
+      }
+
+      pre {
+        overflow: auto;
+        margin: 1rem 0;
+        border: 1px solid #263b55;
+        border-radius: 0.75rem;
+        background: var(--code);
+        padding: 1rem 1.1rem;
+        color: #e8f2ff;
+        font-size: 0.88rem;
+        line-height: 1.58;
+      }
+
+      pre code {
+        background: transparent;
+        padding: 0;
+        color: inherit;
+        font-size: inherit;
+      }
+
+      .page {
+        display: grid;
+        grid-template-columns: minmax(14rem, 17rem) minmax(0, 58rem);
+        justify-content: center;
+        gap: 2rem;
+        padding: 2rem;
+      }
+
+      .sidebar {
+        position: sticky;
+        top: 1.5rem;
+        align-self: start;
+        max-height: calc(100vh - 3rem);
+        overflow: auto;
+        border: 1px solid var(--border);
+        border-radius: 1rem;
+        background: rgba(255, 255, 255, 0.9);
+        padding: 1.25rem;
+        box-shadow: var(--shadow);
+        backdrop-filter: blur(12px);
+      }
+
+      .sidebar__title {
+        margin: 0;
+        color: var(--primary);
+        font-size: 1rem;
+      }
+
+      .sidebar__subtitle {
+        margin: 0.35rem 0 1rem;
+        color: var(--text-soft);
+        font-size: 0.8rem;
+      }
+
+      .sidebar nav {
+        display: grid;
+        gap: 0.2rem;
+      }
+
+      .sidebar a {
+        border-radius: 0.45rem;
+        padding: 0.38rem 0.55rem;
+        color: var(--text-soft);
+        font-size: 0.84rem;
+        text-decoration: none;
+      }
+
+      .sidebar a:hover,
+      .sidebar a:focus-visible {
+        background: var(--primary-soft);
+        color: var(--primary);
+      }
+
+      main {
+        min-width: 0;
+      }
+
+      .hero,
+      section {
+        border: 1px solid var(--border);
+        border-radius: 1rem;
+        background: var(--surface);
+        box-shadow: var(--shadow);
+      }
+
+      .hero {
+        overflow: hidden;
+        margin-bottom: 1.5rem;
+      }
+
+      .hero__accent {
+        height: 0.42rem;
+        background: linear-gradient(90deg, #1367c4, #28a6dc);
+      }
+
+      .hero__content {
+        padding: 2.4rem;
+      }
+
+      .eyebrow {
+        margin: 0 0 0.5rem;
+        color: var(--primary);
+        font-size: 0.78rem;
+        font-weight: 800;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+      }
+
+      h1,
+      h2,
+      h3 {
+        line-height: 1.28;
+      }
+
+      h1 {
+        margin: 0;
+        font-size: clamp(2rem, 5vw, 3.2rem);
+        letter-spacing: -0.04em;
+      }
+
+      .hero__lead {
+        max-width: 44rem;
+        margin: 1rem 0 1.25rem;
+        color: var(--text-soft);
+        font-size: 1.08rem;
+      }
+
+      .badges {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+      }
+
+      .badge {
+        border: 1px solid #bdd5ed;
+        border-radius: 999px;
+        background: var(--primary-soft);
+        padding: 0.3rem 0.7rem;
+        color: #245e96;
+        font-size: 0.78rem;
+        font-weight: 700;
+      }
+
+      section {
+        margin-bottom: 1.25rem;
+        padding: 1.8rem 2rem;
+        scroll-margin-top: 1.5rem;
+      }
+
+      h2 {
+        margin: 0 0 1rem;
+        color: #153b65;
+        font-size: 1.5rem;
+      }
+
+      h3 {
+        margin: 1.5rem 0 0.6rem;
+        font-size: 1.08rem;
+      }
+
+      p {
+        margin: 0.7rem 0;
+      }
+
+      ul,
+      ol {
+        padding-left: 1.4rem;
+      }
+
+      li + li {
+        margin-top: 0.35rem;
+      }
+
+      .summary-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 0.75rem;
+        margin: 1rem 0;
+      }
+
+      .summary-card {
+        border: 1px solid var(--border);
+        border-radius: 0.75rem;
+        background: var(--surface-soft);
+        padding: 1rem;
+      }
+
+      .summary-card strong {
+        display: block;
+        margin-bottom: 0.25rem;
+        color: var(--primary);
+      }
+
+      .callout {
+        margin: 1rem 0;
+        border-left: 0.3rem solid var(--primary);
+        border-radius: 0.6rem;
+        background: var(--primary-soft);
+        padding: 0.9rem 1rem;
+      }
+
+      .callout--warning {
+        border-left-color: var(--warning);
+        background: var(--warning-soft);
+      }
+
+      .callout--success {
+        border-left-color: var(--success);
+        background: var(--success-soft);
+      }
+
+      .callout--danger {
+        border-left-color: var(--danger);
+        background: var(--danger-soft);
+      }
+
+      .callout strong {
+        display: block;
+        margin-bottom: 0.2rem;
+      }
+
+      .table-wrap {
+        overflow-x: auto;
+        margin: 1rem 0;
+        border: 1px solid var(--border);
+        border-radius: 0.75rem;
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 0.9rem;
+      }
+
+      th,
+      td {
+        border-bottom: 1px solid var(--border);
+        padding: 0.7rem 0.8rem;
+        text-align: left;
+        vertical-align: top;
+      }
+
+      th {
+        background: #edf4fc;
+        color: #234b77;
+        font-weight: 750;
+      }
+
+      tr:last-child td {
+        border-bottom: 0;
+      }
+
+      .steps {
+        counter-reset: integration-step;
+        list-style: none;
+        padding-left: 0;
+      }
+
+      .steps > li {
+        position: relative;
+        margin: 1rem 0;
+        padding-left: 3rem;
+      }
+
+      .steps > li::before {
+        counter-increment: integration-step;
+        content: counter(integration-step);
+        position: absolute;
+        top: -0.05rem;
+        left: 0;
+        display: grid;
+        width: 2rem;
+        height: 2rem;
+        place-items: center;
+        border-radius: 50%;
+        background: var(--primary);
+        color: #fff;
+        font-size: 0.82rem;
+        font-weight: 800;
+      }
+
+      .checklist {
+        list-style: none;
+        padding-left: 0;
+      }
+
+      .checklist li {
+        position: relative;
+        padding-left: 1.65rem;
+      }
+
+      .checklist li::before {
+        content: "✓";
+        position: absolute;
+        left: 0;
+        color: var(--success);
+        font-weight: 900;
+      }
+
+      .footer {
+        padding: 1rem 0 3rem;
+        color: var(--text-soft);
+        font-size: 0.82rem;
+        text-align: center;
+      }
+
+      @media (max-width: 850px) {
+        .page {
+          display: block;
+          padding: 1rem;
+        }
+
+        .sidebar {
+          position: static;
+          max-height: none;
+          margin-bottom: 1rem;
+        }
+
+        .sidebar nav {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+
+        .summary-grid {
+          grid-template-columns: 1fr;
+        }
+
+        .hero__content,
+        section {
+          padding: 1.3rem;
+        }
+      }
+
+      @media print {
+        body {
+          background: #fff;
+        }
+
+        .page {
+          display: block;
+          padding: 0;
+        }
+
+        .sidebar {
+          display: none;
+        }
+
+        .hero,
+        section {
+          break-inside: avoid;
+          box-shadow: none;
+        }
+
+        pre {
+          white-space: pre-wrap;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="page">
+      <aside class="sidebar">
+        <p class="sidebar__title">FabSQL Session 手冊</p>
+        <p class="sidebar__subtitle">Laravel 8／既有 ERP 登入</p>
+        <nav aria-label="手冊目錄">
+          <a href="#goal">1. 目標與架構</a>
+          <a href="#requirements">2. 整合前提</a>
+          <a href="#backup">3. 備份</a>
+          <a href="#files">4. 必要檔案</a>
+          <a href="#database">5. 資料庫設定</a>
+          <a href="#routes">6. Session 路由</a>
+          <a href="#auth">7. auth middleware</a>
+          <a href="#csrf">8. CSRF</a>
+          <a href="#cookies">9. Cookie 與 CORS</a>
+          <a href="#deploy">10. 前端部署</a>
+          <a href="#settings">11. 前端設定</a>
+          <a href="#verify">12. 驗證</a>
+          <a href="#troubleshooting">13. 排錯</a>
+          <a href="#change-log">14. 異動紀錄</a>
+          <a href="#rollback">15. 回復</a>
+        </nav>
+      </aside>
+
+      <main>
+        <header class="hero">
+          <div class="hero__accent"></div>
+          <div class="hero__content">
+            <p class="eyebrow">Integration Guide</p>
+            <h1>FabSQL Builder<br>Laravel Session 整合手冊</h1>
+            <p class="hero__lead">
+              將尚未加入 FabSQL 的既有 Laravel ERP，改造成沿用既有登入
+              Session 的唯讀 Schema 與 Query API。
+            </p>
+            <div class="badges">
+              <span class="badge">Laravel 8.83.29</span>
+              <span class="badge">PHP 7.4.33</span>
+              <span class="badge">ERP Session</span>
+              <span class="badge">No JWT</span>
+              <span class="badge">SELECT Only</span>
+            </div>
+          </div>
+        </header>
+
+        <section id="goal">
+          <h2>1. 目標與完成後架構</h2>
+          <p>
+            此方案直接沿用 ERP 已存在的登入與 Session，不建立新的
+            FabSQL 登入方法。
+          </p>
+          <div class="summary-grid">
+            <div class="summary-card">
+              <strong>保留既有登入</strong>
+              不修改 ERP User model、登入頁與 Session 寫入流程。
+            </div>
+            <div class="summary-card">
+              <strong>不使用 JWT</strong>
+              不需要 <code>api_users</code>、login、refresh 或 Bearer token。
+            </div>
+            <div class="summary-card">
+              <strong>路由放在 web.php</strong>
+              使用 Laravel <code>web</code> middleware group 取得 Session。
+            </div>
+            <div class="summary-card">
+              <strong>唯讀查詢</strong>
+              後端只接受結構化 Query Model，編譯為參數化
+              <code>SELECT</code>。
+            </div>
+          </div>
+
+          <h3>完成後的路由</h3>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Method</th>
+                  <th>路徑</th>
+                  <th>用途</th>
+                  <th>驗證</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>GET</td>
+                  <td><code>/fabsql/</code></td>
+                  <td>FabSQL 前端</td>
+                  <td>依網站需求</td>
+                </tr>
+                <tr>
+                  <td>GET</td>
+                  <td><code>/fabsql/health</code></td>
+                  <td>服務與資料庫健康檢查</td>
+                  <td>公開</td>
+                </tr>
+                <tr>
+                  <td>GET</td>
+                  <td><code>/fabsql/schema/databases</code></td>
+                  <td>資料庫清單</td>
+                  <td>ERP Session</td>
+                </tr>
+                <tr>
+                  <td>GET</td>
+                  <td><code>/fabsql/schema/tables</code></td>
+                  <td>資料表清單</td>
+                  <td>ERP Session</td>
+                </tr>
+                <tr>
+                  <td>GET</td>
+                  <td><code>/fabsql/schema/tables/{tableName}/columns</code></td>
+                  <td>欄位清單</td>
+                  <td>ERP Session</td>
+                </tr>
+                <tr>
+                  <td>POST</td>
+                  <td><code>/fabsql/query/run</code></td>
+                  <td>執行唯讀 Query Model</td>
+                  <td>ERP Session</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div class="callout callout--success">
+            <strong>前端 Session URL</strong>
+            若網站為 <code>http://jl.test</code>，環境設定應填
+            <code>http://jl.test/fabsql</code>，不要加上
+            <code>/health</code> 或 <code>/api</code>。
+          </div>
+        </section>
+
+        <section id="requirements">
+          <h2>2. 整合前提</h2>
+          <ul class="checklist">
+            <li>ERP 登入流程已可正常使用。</li>
+            <li>已有可判斷登入狀態的 <code>auth</code> middleware。</li>
+            <li><code>routes/web.php</code> 由 <code>web</code> middleware group 載入。</li>
+            <li><code>web</code> group 已啟動 Cookie 與 Session。</li>
+            <li>已有可用的 MariaDB／MySQL database connection。</li>
+            <li>資料庫帳號可以讀取目標資料庫與 <code>INFORMATION_SCHEMA</code>。</li>
+          </ul>
+
+          <p>典型的 <code>web</code> middleware group：</p>
+          <pre><code>'web' =&gt; [
+  \App\Http\Middleware\EncryptCookies::class,
+  \Illuminate\Cookie\Middleware\AddQueuedCookiesToResponse::class,
+  \Illuminate\Session\Middleware\StartSession::class,
+  \Illuminate\View\Middleware\ShareErrorsFromSession::class,
+  \App\Http\Middleware\VerifyCsrfToken::class,
+  \Illuminate\Routing\Middleware\SubstituteBindings::class,
+],</code></pre>
+
+          <div class="callout callout--warning">
+            <strong>未登入回應必須可辨識</strong>
+            FabSQL 前端以 HTTP <code>401</code> 判斷 Session 已失效。若 ERP
+            自訂 middleware 在未登入時仍回傳 HTTP <code>200</code>，
+            應只針對 <code>/fabsql/*</code> JSON request 改回
+            <code>401</code>，不要破壞其他 ERP 畫面契約。
+          </div>
+        </section>
+
+        <section id="backup">
+          <h2>3. 整合前先備份</h2>
+          <p>至少備份：</p>
+          <pre><code>routes/web.php
+config/database.php
+config/cors.php
+config/session.php
+app/Http/Kernel.php
+app/Http/Middleware/VerifyCsrfToken.php</code></pre>
+          <p>若專案使用 Git，先確認工作區：</p>
+          <pre><code>git status -sb</code></pre>
+          <p>
+            不要覆蓋目標專案原本的 User model、登入流程、Session 邏輯或
+            <code>auth</code> middleware。
+          </p>
+        </section>
+
+        <section id="files">
+          <h2>4. 複製必要後端檔案</h2>
+          <p>
+            從已完成的 <code>/Users/jimmywon/Herd/api.jl</code>
+            複製以下 8 個檔案到目標 Laravel 專案的相同位置：
+          </p>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>檔案</th>
+                  <th>用途</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><code>config/fabsql.php</code></td>
+                  <td>Connection、最大結果筆數與 filter 深度</td>
+                </tr>
+                <tr>
+                  <td><code>app/Services/FabSql/SchemaRepository.php</code></td>
+                  <td>讀取 database、table、column metadata</td>
+                </tr>
+                <tr>
+                  <td><code>app/Services/FabSql/QueryModelValidator.php</code></td>
+                  <td>驗證 Query Model</td>
+                </tr>
+                <tr>
+                  <td><code>app/Services/FabSql/QueryModelCompiler.php</code></td>
+                  <td>編譯參數化 MariaDB SELECT</td>
+                </tr>
+                <tr>
+                  <td><code>app/Services/FabSql/ReadOnlyQueryExecutor.php</code></td>
+                  <td>在唯讀 transaction 執行查詢</td>
+                </tr>
+                <tr>
+                  <td><code>app/Http/Requests/FabSql/RunQueryRequest.php</code></td>
+                  <td>驗證 request 外層結構</td>
+                </tr>
+                <tr>
+                  <td><code>app/Http/Controllers/Api/FabSql/SchemaController.php</code></td>
+                  <td>health、databases、tables、columns API</td>
+                </tr>
+                <tr>
+                  <td><code>app/Http/Controllers/Api/FabSql/QueryController.php</code></td>
+                  <td>驗證、編譯並執行唯讀 Query Model</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <h3>Session 方案不要複製</h3>
+          <pre><code>app/Http/Middleware/FabSqlJwtAuthenticate.php
+app/Console/Commands/CreateFabSqlUser.php
+database/migrations/2026_07_28_000000_create_api_users_table.php</code></pre>
+          <p>也不需要：</p>
+          <ul>
+            <li><code>fabsql.auth</code> middleware alias。</li>
+            <li><code>/api/login</code>、<code>/api/refresh</code>、<code>/api/logout</code>。</li>
+            <li>修改 <code>App\Models\User</code>。</li>
+            <li>建立 <code>api_users</code> 或安裝 JWT 套件。</li>
+          </ul>
+        </section>
+
+        <section id="database">
+          <h2>5. 設定資料庫 Connection</h2>
+          <p>
+            確認 <code>config/database.php</code> 已存在 FabSQL 要使用的
+            connection。參考專案的名稱是 <code>jl</code>。
+          </p>
+          <pre><code>&lt;?php
+
+return [
+  'connection' =&gt; 'jl',
+  'maximum_result_rows' =&gt; 200,
+  'maximum_filter_depth' =&gt; 20,
+];</code></pre>
+          <p>
+            若目標專案使用不同名稱，只修改
+            <code>config/fabsql.php</code> 的 <code>connection</code>。
+            資料庫密碼仍由 <code>config/database.php</code> 與
+            <code>.env</code> 管理。
+          </p>
+          <div class="callout callout--danger">
+            <strong>最小資料庫權限</strong>
+            建議 FabSQL connection 只授權 SELECT 與必要的
+            INFORMATION_SCHEMA 讀取，不要授權 INSERT、UPDATE、DELETE、
+            DROP 或 ALTER。
+          </div>
+        </section>
+
+        <section id="routes">
+          <h2>6. 在 web.php 加入 Session 路由</h2>
+          <p>在 <code>routes/web.php</code> 頂部加入：</p>
+          <pre><code>use App\Http\Controllers\Api\FabSql\QueryController;
+use App\Http\Controllers\Api\FabSql\SchemaController;</code></pre>
+          <p>加入以下路由：</p>
+          <pre><code>Route::get('/fabsql/health', [
+  SchemaController::class,
+  'health',
+]);
+
+Route::group([
+  'prefix' =&gt; 'fabsql',
+  'middleware' =&gt; 'auth',
+], function () {
+  Route::get('/schema/databases', [
+    SchemaController::class,
+    'databases',
+  ]);
+
+  Route::get('/schema/tables', [
+    SchemaController::class,
+    'tables',
+  ]);
+
+  Route::get('/schema/tables/{tableName}/columns', [
+    SchemaController::class,
+    'columns',
+  ]);
+
+  Route::post('/query/run', [
+    QueryController::class,
+    'run',
+  ]);
+});</code></pre>
+          <div class="callout">
+            <strong>路由位置</strong>
+            <code>health</code> 放在 auth group 外；其他四個 API 都必須在
+            auth group 內。路由放在 <code>web.php</code>，因為 Laravel
+            的 <code>api.php</code> 預設是無狀態 middleware group。
+          </div>
+          <p>若 JWT API 仍存在，兩組可以同時保留：</p>
+          <pre><code>/api/schema/...      JWT
+/fabsql/schema/...   ERP Session</code></pre>
+          <p>URI 不同，不會互相覆蓋。</p>
+        </section>
+
+        <section id="auth">
+          <h2>7. 沿用既有 auth Middleware</h2>
+          <p>
+            <code>'middleware' =&gt; 'auth'</code> 直接呼叫目標 ERP 已有的
+            驗證邏輯。FabSQL 不限定 Session key，只要求 middleware
+            能判斷目前 request 是否已登入。
+          </p>
+          <p>
+            參考 <code>api.jl</code> 會讀取 ERP Session 的
+            <code>_userid</code>；只要 ERP 登入已寫入該 Session，
+            FabSQL 受保護路由即可通過。
+          </p>
+          <p>若使用 Laravel 標準 guard，確認：</p>
+          <pre><code>'guards' =&gt; [
+  'web' =&gt; [
+    'driver' =&gt; 'session',
+    'provider' =&gt; 'users',
+  ],
+],</code></pre>
+          <p>驗證成功標準：</p>
+          <ol>
+            <li>未登入不能存取四個受保護 API。</li>
+            <li>登入 ERP 後，同一瀏覽器可以存取。</li>
+            <li>Session 過期後回傳 HTTP 401 JSON。</li>
+          </ol>
+        </section>
+
+        <section id="csrf">
+          <h2>8. 檢查 CSRF</h2>
+          <p>
+            <code>POST /fabsql/query/run</code> 位於
+            <code>web.php</code>。標準 Laravel 會對 POST 執行 CSRF
+            驗證，但目前 FabSQL fetch 尚未送出 CSRF header。
+          </p>
+          <h3>目標 ERP 已停用 CSRF</h3>
+          <p>
+            不需額外修改。現在的 <code>api.jl</code> 屬於此情況。
+          </p>
+          <h3>目標 ERP 保留標準 CSRF</h3>
+          <p>
+            不要為 FabSQL 全域關閉 CSRF。若要讓目前前端直接使用，可在
+            <code>app/Http/Middleware/VerifyCsrfToken.php</code>
+            只排除唯讀查詢端點：
+          </p>
+          <pre><code>protected $except = [
+  'fabsql/query/run',
+];</code></pre>
+          <div class="callout callout--warning">
+            <strong>不要排除 fabsql/*</strong>
+            例外只放 <code>fabsql/query/run</code>。更嚴格的方案是保留
+            CSRF，並修改前端送出 <code>X-XSRF-TOKEN</code>，之後再重新
+            編譯。
+          </div>
+        </section>
+
+        <section id="cookies">
+          <h2>9. Session Cookie 與 CORS</h2>
+          <h3>建議：前端與 API 使用同一 Origin</h3>
+          <pre><code>ERP 登入：http://jl.test/login
+FabSQL 前端：http://jl.test/fabsql/
+FabSQL API：http://jl.test/fabsql/health</code></pre>
+          <p>
+            這是最簡單且穩定的方式，通常不需要額外 CORS，也不需要跨
+            子網域分享 Cookie。
+          </p>
+
+          <h3>跨子網域</h3>
+          <p>
+            若前端是 <code>jl.test</code>，API 是
+            <code>api.jl.test</code>，Session Cookie 必須可供兩個
+            子網域使用：
+          </p>
+          <pre><code>SESSION_DOMAIN=.jl.test
+SESSION_SECURE_COOKIE=false</code></pre>
+          <p>正式 HTTPS：</p>
+          <pre><code>SESSION_DOMAIN=.example.com
+SESSION_SECURE_COOKIE=true</code></pre>
+          <p>
+            同一主網域且同一 URL scheme 通常可維持
+            <code>same_site = lax</code>。真正跨站時通常需要
+            <code>SameSite=None</code>，並且必須使用 HTTPS Secure Cookie。
+          </p>
+
+          <h3>Credentialed CORS</h3>
+          <pre><code>return [
+  'paths' =&gt; [
+    'fabsql/*',
+  ],
+  'allowed_methods' =&gt; [
+    'GET',
+    'POST',
+    'OPTIONS',
+  ],
+  'allowed_origins' =&gt; [
+    'http://jl.test',
+  ],
+  'allowed_origins_patterns' =&gt; [],
+  'allowed_headers' =&gt; [
+    'Accept',
+    'Content-Type',
+    'X-CSRF-TOKEN',
+    'X-XSRF-TOKEN',
+  ],
+  'exposed_headers' =&gt; [],
+  'max_age' =&gt; 0,
+  'supports_credentials' =&gt; true,
+];</code></pre>
+          <div class="callout callout--danger">
+            <strong>不要使用萬用 Origin</strong>
+            Credentialed request 不應將 <code>allowed_origins</code>
+            設為 <code>*</code>，請列出實際前端 Origin。
+          </div>
+        </section>
+
+        <section id="deploy">
+          <h2>10. 編譯與部署前端</h2>
+          <p>FabSQL Web 已設定：</p>
+          <pre><code>base: '/fabsql/'</code></pre>
+          <p>執行 Web 編譯：</p>
+          <pre><code>cd /Users/jimmywon/ai/fabsql-builder
+npm run build -w @sql-builder/web</code></pre>
+          <p>輸出位置：</p>
+          <pre><code>/Users/jimmywon/ai/fabsql-builder/apps/web/dist</code></pre>
+          <p>把 <code>dist</code> 裡面的內容放到：</p>
+          <pre><code>目標 Laravel 專案/public/fabsql/index.html
+目標 Laravel 專案/public/fabsql/assets/</code></pre>
+          <div class="callout callout--warning">
+            <strong>不要多包一層 dist</strong>
+            正確是 <code>public/fabsql/index.html</code>，不是
+            <code>public/fabsql/dist/index.html</code>。
+          </div>
+          <p>產出的 HTML 資源路徑應為：</p>
+          <pre><code>/fabsql/assets/index-....js
+/fabsql/assets/index-....css</code></pre>
+        </section>
+
+        <section id="settings">
+          <h2>11. FabSQL 前端環境設定</h2>
+          <ol class="steps">
+            <li>先使用相同瀏覽器登入 ERP。</li>
+            <li>開啟 <code>http://jl.test/fabsql/</code>。</li>
+            <li>開啟「環境設定」。</li>
+            <li>在「連線與驗證」選擇 <strong>Session</strong>。</li>
+            <li>Laravel 網址輸入 <code>http://jl.test/fabsql</code>。</li>
+            <li>按下「套用」。</li>
+          </ol>
+          <p>
+            Session 模式不需要 Email 或密碼。所有 Session request
+            都會使用：
+          </p>
+          <pre><code>credentials: 'include'</code></pre>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>設定</th>
+                  <th>範例</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>正確</td>
+                  <td><code>http://jl.test/fabsql</code></td>
+                </tr>
+                <tr>
+                  <td>錯誤</td>
+                  <td><code>http://jl.test/fabsql/health</code></td>
+                </tr>
+                <tr>
+                  <td>錯誤</td>
+                  <td><code>http://jl.test/fabsql/api</code></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section id="verify">
+          <h2>12. 清除 Cache 與驗證</h2>
+          <h3>清除 Laravel Cache</h3>
+          <pre><code>php artisan optimize:clear</code></pre>
+          <p>若 Laravel 版本不支援，分別執行：</p>
+          <pre><code>php artisan route:clear
+php artisan config:clear
+php artisan cache:clear</code></pre>
+
+          <h3>檢查路由</h3>
+          <pre><code>php artisan route:list --path=fabsql</code></pre>
+          <p>預期：</p>
+          <pre><code>GET|HEAD  fabsql/health
+GET|HEAD  fabsql/schema/databases
+GET|HEAD  fabsql/schema/tables
+GET|HEAD  fabsql/schema/tables/{tableName}/columns
+POST      fabsql/query/run</code></pre>
+
+          <h3>公開 Health</h3>
+          <pre><code>curl -i http://jl.test/fabsql/health</code></pre>
+          <p>未登入也應回傳 HTTP 200 與：</p>
+          <pre><code>{
+  "status": "ok",
+  "database": {
+    "name": "資料庫名稱",
+    "version": "MariaDB 版本"
+  }
+}</code></pre>
+
+          <h3>Session 驗證</h3>
+          <ol>
+            <li>無痕視窗請求 schema，預期 HTTP 401。</li>
+            <li>登入 ERP 後，在同一瀏覽器重新請求，預期 HTTP 200。</li>
+            <li>Network 應顯示 request 帶有 ERP Session Cookie。</li>
+            <li>加入資料表與欄位後按 Run，確認 POST query 回傳 200。</li>
+            <li>從 ERP 登出後再請求，前端應顯示「需要先登入 ERP」。</li>
+          </ol>
+
+          <h3>建議測試案例</h3>
+          <ul class="checklist">
+            <li>health 未登入仍是 200。</li>
+            <li>四個保護 API 未登入都是 401。</li>
+            <li>已登入可取得 databases、tables、columns。</li>
+            <li>已登入可執行結構化 Query Model。</li>
+            <li>Query compiler 只能產生 SELECT。</li>
+            <li>不存在的 database 或 table 回傳明確錯誤。</li>
+            <li>結果筆數受 maximum_result_rows 限制。</li>
+          </ul>
+          <div class="callout">
+            <strong>測試檔注意事項</strong>
+            目前 api.jl 的 Feature tests 已在後續階段改為 JWT
+            <code>/api/*</code> 測試，不應原封不動複製成 Session
+            測試。Session Feature test 必須依目標 ERP 的登入 Session
+            key 調整。
+          </div>
+        </section>
+
+        <section id="troubleshooting">
+          <h2>13. 常見問題</h2>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>現象</th>
+                  <th>可能原因</th>
+                  <th>處理方式</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>JS／CSS 404</td>
+                  <td>Vite base 仍是 <code>/</code></td>
+                  <td>使用 <code>base: '/fabsql/'</code> 重新編譯</td>
+                </tr>
+                <tr>
+                  <td>送到 <code>/fabsql/api/health</code></td>
+                  <td>舊版前端或未選 Session</td>
+                  <td>更新前端並選 Session</td>
+                </tr>
+                <tr>
+                  <td>health 404</td>
+                  <td>路由未載入或 route cache</td>
+                  <td>清除 cache 並檢查 route:list</td>
+                </tr>
+                <tr>
+                  <td>health 正常但 schema 401</td>
+                  <td>Session Cookie 未送出</td>
+                  <td>先登入 ERP，檢查 Cookie domain</td>
+                </tr>
+                <tr>
+                  <td>schema 回傳 302 或 HTML</td>
+                  <td>auth 導向登入頁</td>
+                  <td>JSON request 改回 HTTP 401</td>
+                </tr>
+                <tr>
+                  <td>未登入卻回 HTTP 200</td>
+                  <td>ERP 自訂錯誤格式</td>
+                  <td>只對 <code>/fabsql/*</code> 回 401</td>
+                </tr>
+                <tr>
+                  <td>query 419</td>
+                  <td>CSRF token 缺失</td>
+                  <td>窄範圍排除 query/run 或讓前端送 token</td>
+                </tr>
+                <tr>
+                  <td>CORS 錯誤</td>
+                  <td>前端與 API 不同 Origin</td>
+                  <td>設定明確 Origin 與 credentials</td>
+                </tr>
+                <tr>
+                  <td>已登入但 API 看不到 Session</td>
+                  <td>host-only Cookie 或 SameSite／Secure 不符</td>
+                  <td>優先改同 Origin，或調整 Session Cookie</td>
+                </tr>
+                <tr>
+                  <td>MariaDB 無法連線</td>
+                  <td>FabSQL connection 名稱錯誤</td>
+                  <td>改成 config/database.php 的實際名稱</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section id="change-log">
+          <h2>14. API 異動紀錄</h2>
+          <p>
+            每個整合 FabSQL 的 Laravel 專案都應建立
+            <code>FABSQL_CHANGES.md</code>，至少記錄：
+          </p>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>狀態</th>
+                  <th>檔案</th>
+                  <th>用途</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>新增</td>
+                  <td><code>config/fabsql.php</code></td>
+                  <td>Connection 與限制</td>
+                </tr>
+                <tr>
+                  <td>新增</td>
+                  <td><code>app/Services/FabSql/*.php</code></td>
+                  <td>Schema、validation、compiler、executor</td>
+                </tr>
+                <tr>
+                  <td>新增</td>
+                  <td><code>app/Http/Requests/FabSql/RunQueryRequest.php</code></td>
+                  <td>Request validation</td>
+                </tr>
+                <tr>
+                  <td>新增</td>
+                  <td><code>app/Http/Controllers/Api/FabSql/*.php</code></td>
+                  <td>Schema 與 Query API</td>
+                </tr>
+                <tr>
+                  <td>修改</td>
+                  <td><code>routes/web.php</code></td>
+                  <td>Session 路由</td>
+                </tr>
+                <tr>
+                  <td>視情況修改</td>
+                  <td>database、CORS、Session、CSRF、Authenticate</td>
+                  <td>依目標 ERP 環境調整</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <p>記錄 SHA-256：</p>
+          <pre><code>shasum -a 256 routes/web.php
+shasum -a 256 config/fabsql.php
+shasum -a 256 app/Services/FabSql/*.php
+shasum -a 256 app/Http/Requests/FabSql/RunQueryRequest.php
+shasum -a 256 app/Http/Controllers/Api/FabSql/*.php</code></pre>
+          <p>
+            Session、Cache、Log 與 PHPUnit cache 應標示為 runtime
+            檔案，不要誤列成人工 source code 修改。
+          </p>
+        </section>
+
+        <section id="rollback">
+          <h2>15. 回復方式</h2>
+          <ol>
+            <li>從 <code>web.php</code> 移除兩個 controller import。</li>
+            <li>移除 health 與 <code>prefix =&gt; fabsql</code> route group。</li>
+            <li>移除本手冊第 4 節的 8 個 FabSQL 後端檔案。</li>
+            <li>回復因 FabSQL 修改的 CORS、Session 或 CSRF 設定。</li>
+            <li>移除 <code>public/fabsql</code> 靜態前端。</li>
+            <li>執行 <code>php artisan optimize:clear</code>。</li>
+            <li>在 <code>FABSQL_CHANGES.md</code> 記錄回復日期與檔案。</li>
+          </ol>
+          <div class="callout callout--danger">
+            <strong>不要移除 ERP 基礎功能</strong>
+            不要刪除 ERP 原本的登入、Session、auth middleware 或資料庫
+            connection。
+          </div>
+
+          <h3>官方參考</h3>
+          <ul>
+            <li><a href="https://laravel.com/docs/8.x/routing">Laravel 8 Routing</a></li>
+            <li><a href="https://laravel.com/docs/8.x/middleware">Laravel 8 Middleware</a></li>
+            <li><a href="https://laravel.com/docs/8.x/session">Laravel 8 Session</a></li>
+            <li><a href="https://laravel.com/docs/8.x/csrf">Laravel 8 CSRF Protection</a></li>
+            <li><a href="https://vite.dev/guide/build#public-base-path">Vite Public Base Path</a></li>
+          </ul>
+        </section>
+
+        <footer class="footer">
+          FabSQL Builder Laravel Session Integration Guide · 2026-07-29
+        </footer>
+      </main>
+    </div>
+  </body>
+</html>

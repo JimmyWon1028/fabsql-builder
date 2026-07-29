@@ -27,12 +27,14 @@ import {
 
 import EnvironmentSettingsDialog
   from './components/EnvironmentSettingsDialog.vue'
+import ExportPngIcon from './components/ExportPngIcon.vue'
 import QueryCanvas from './components/QueryCanvas.vue'
 import QueryInspector from './components/QueryInspector.vue'
 import QueryWorkspacePanel from './components/QueryWorkspacePanel.vue'
 import RegionMaximizeIcon from './components/RegionMaximizeIcon.vue'
 import SchemaExplorer from './components/SchemaExplorer.vue'
 import {
+  type ApiProvider,
   useApplicationPreferences
 } from './preferences/use-application-preferences'
 import { useQueryBuilder } from './query-builder/use-query-builder'
@@ -47,16 +49,30 @@ import {
   removePersistentItem,
   setPersistentItem
 } from './services/persistent-storage'
+import {
+  LaravelAuthenticationRequiredError,
+  LaravelSessionAuthenticationRequiredError
+} from './services/laravel-auth'
 
 type MaximizedRegion = 'canvas' | 'workspace'
 
+interface QueryCanvasExportApi {
+  exportPng: () => Promise<{
+    fileName: string
+    width: number
+    height: number
+  }>
+}
+
 const health = ref<HealthResponse | null>(null)
 const connectionFailed = ref(false)
+const authenticationRequired = ref(false)
 const databases = ref<string[]>([])
 const selectedDatabase = ref('')
 const isEditingDatabase = ref(false)
 const databaseSelect = ref<HTMLSelectElement | null>(null)
 const queryFileInput = ref<HTMLInputElement | null>(null)
+const queryCanvas = ref<QueryCanvasExportApi | null>(null)
 const schemaExplorerWidth = ref(280)
 const isSchemaDrawerCollapsed = ref(false)
 const isResizingSchema = ref(false)
@@ -66,7 +82,9 @@ const isResizingInspector = ref(false)
 const workspacePanelHeight = ref(190)
 const isWorkspaceDrawerCollapsed = ref(false)
 const isResizingWorkspacePanel = ref(false)
+const isSqlEditing = ref(false)
 const quoteIdentifiers = ref(false)
+const namedParameterValues = ref<Record<string, string>>({})
 const uiScale = ref(1)
 const maximizedRegion = ref<MaximizedRegion | null>(null)
 const isEnvironmentSettingsOpen = ref(false)
@@ -90,10 +108,37 @@ let workspaceResizeStartedCollapsed = false
 let workspaceResizeMoved = false
 let suppressWorkspaceDrawerClick = false
 const pendingColumnRequests = new Map<string, Promise<void>>()
-const { t } = useApplicationPreferences()
+const {
+  apiProvider,
+  t
+} = useApplicationPreferences()
+const apiProviderLabel = computed(() => {
+  if (apiProvider.value === 'fastify') {
+    return t('settings.databaseMode')
+  }
+
+  if (apiProvider.value === 'session') {
+    return t('settings.sessionMode')
+  }
+
+  return t('settings.apiMode')
+})
+const authenticationRequiredLabel = computed(() =>
+  apiProvider.value === 'session'
+    ? t('app.sessionRequired')
+    : t('app.authenticationRequired')
+)
+
+function isAuthenticationRequiredError(error: unknown): boolean {
+  return error instanceof LaravelAuthenticationRequiredError
+    || error instanceof LaravelSessionAuthenticationRequiredError
+}
 
 const {
   model,
+  activeModel,
+  activeQueryPath,
+  queryBreadcrumbs,
   canUndo,
   canRedo,
   savedAt,
@@ -105,6 +150,7 @@ const {
   setFieldSelected,
   updateSelectedField,
   reorderSelectedField,
+  setDistinct,
   setJoins,
   addJoin,
   setFilters,
@@ -117,24 +163,32 @@ const {
   redo,
   reset,
   restore,
+  applyImportedModel,
+  enterSubquery,
+  enterSetOperation,
+  navigateToQueryDepth,
   clearSavedQuery
 } = useQueryBuilder()
 
 const compileResult = computed(() => compileQuery(model.value))
 const defaultSchemaExplorerWidth = 280
-const minimumSchemaExplorerWidth = 220
+const minimumSchemaExplorerWidth = 0
+const schemaDrawerClickOpenWidth = 220
 const maximumSchemaExplorerWidth = 520
 const minimumWorkbenchWidth = 900
 const splitterWidth = 7
 const defaultQueryInspectorWidth = 440
-const minimumQueryInspectorWidth = 340
+const minimumQueryInspectorWidth = 0
+const inspectorDrawerClickOpenWidth = 340
 const maximumQueryInspectorWidth = 720
 const minimumCanvasWidth = 470
 const defaultWorkspacePanelHeight = 190
-const minimumWorkspacePanelHeight = 150
+const minimumWorkspacePanelHeight = 0
+const workspaceDrawerClickOpenHeight = 150
 const minimumCanvasHeight = 280
 const horizontalSplitterHeight = 7
 const drawerOpenDragThreshold = 6
+const drawerCollapseDragThreshold = 20
 const minimumUiScale = 0.7
 const maximumUiScale = 1.3
 const uiScaleStep = 0.1
@@ -151,6 +205,7 @@ interface PersistedWorkspaceState {
   workspacePanelHeight: number
   workspaceDrawerCollapsed?: boolean
   quoteIdentifiers: boolean
+  namedParameterValues?: Record<string, string>
   uiScale: number
   queryModel: QueryModel
   updatedAt: string
@@ -192,6 +247,17 @@ async function readWorkspaceState(): Promise<PersistedWorkspaceState | null> {
         && typeof value.quoteIdentifiers !== 'boolean'
       )
       || (
+        value.namedParameterValues !== undefined
+        && (
+          typeof value.namedParameterValues !== 'object'
+          || value.namedParameterValues === null
+          || Array.isArray(value.namedParameterValues)
+          || Object.values(value.namedParameterValues).some(
+            (parameterValue) => typeof parameterValue !== 'string'
+          )
+        )
+      )
+      || (
         value.uiScale !== undefined
         && !Number.isFinite(value.uiScale)
       )
@@ -210,6 +276,7 @@ async function readWorkspaceState(): Promise<PersistedWorkspaceState | null> {
         : defaultWorkspacePanelHeight,
       workspaceDrawerCollapsed: value.workspaceDrawerCollapsed === true,
       quoteIdentifiers: value.quoteIdentifiers === true,
+      namedParameterValues: value.namedParameterValues ?? {},
       uiScale: Number.isFinite(value.uiScale)
         ? clampUiScale(Number(value.uiScale))
         : 1
@@ -239,6 +306,7 @@ async function persistWorkspaceState(): Promise<void> {
     workspacePanelHeight: workspacePanelHeight.value,
     workspaceDrawerCollapsed: isWorkspaceDrawerCollapsed.value,
     quoteIdentifiers: quoteIdentifiers.value,
+    namedParameterValues: namedParameterValues.value,
     uiScale: uiScale.value,
     queryModel: model.value,
     updatedAt: updatedAt.toISOString()
@@ -392,7 +460,7 @@ function resizeSchema(event: PointerEvent): void {
 
   const width = event.clientX / uiScale.value
 
-  if (width <= minimumSchemaExplorerWidth) {
+  if (width <= drawerCollapseDragThreshold) {
     collapseSchemaDrawer()
     return
   }
@@ -430,7 +498,7 @@ function openSchemaDrawerFromHandle(): void {
   }
 
   if (isSchemaDrawerCollapsed.value) {
-    expandSchemaDrawer(minimumSchemaExplorerWidth)
+    expandSchemaDrawer(schemaDrawerClickOpenWidth)
   }
 }
 
@@ -445,7 +513,7 @@ function resizeSchemaWithKeyboard(event: KeyboardEvent): void {
       || event.key === ' '
     ) {
       event.preventDefault()
-      expandSchemaDrawer(minimumSchemaExplorerWidth)
+      expandSchemaDrawer(schemaDrawerClickOpenWidth)
     }
 
     return
@@ -561,7 +629,7 @@ function resizeInspector(event: PointerEvent): void {
     window.innerWidth - event.clientX
   ) / uiScale.value
 
-  if (width <= minimumQueryInspectorWidth) {
+  if (width <= drawerCollapseDragThreshold) {
     collapseInspectorDrawer()
     return
   }
@@ -599,7 +667,7 @@ function openInspectorDrawerFromHandle(): void {
   }
 
   if (isInspectorDrawerCollapsed.value) {
-    expandInspectorDrawer(minimumQueryInspectorWidth)
+    expandInspectorDrawer(inspectorDrawerClickOpenWidth)
   }
 }
 
@@ -614,7 +682,7 @@ function resizeInspectorWithKeyboard(event: KeyboardEvent): void {
       || event.key === ' '
     ) {
       event.preventDefault()
-      expandInspectorDrawer(minimumQueryInspectorWidth)
+      expandInspectorDrawer(inspectorDrawerClickOpenWidth)
     }
 
     return
@@ -738,7 +806,7 @@ function resizeWorkspacePanel(event: PointerEvent): void {
     window.innerHeight - event.clientY
   ) / uiScale.value
 
-  if (height <= minimumWorkspacePanelHeight) {
+  if (height <= drawerCollapseDragThreshold) {
     collapseWorkspaceDrawer()
     return
   }
@@ -776,7 +844,7 @@ function openWorkspaceDrawerFromHandle(): void {
   }
 
   if (isWorkspaceDrawerCollapsed.value) {
-    expandWorkspaceDrawer(minimumWorkspacePanelHeight)
+    expandWorkspaceDrawer(workspaceDrawerClickOpenHeight)
   }
 }
 
@@ -791,7 +859,7 @@ function resizeWorkspacePanelWithKeyboard(event: KeyboardEvent): void {
       || event.key === ' '
     ) {
       event.preventDefault()
-      expandWorkspaceDrawer(minimumWorkspacePanelHeight)
+      expandWorkspaceDrawer(workspaceDrawerClickOpenHeight)
     }
 
     return
@@ -848,10 +916,99 @@ function showNotification(message: string): void {
   }, 2200)
 }
 
+async function exportQueryCanvasPng(): Promise<void> {
+  try {
+    const result = await queryCanvas.value?.exportPng()
+
+    if (result) {
+      showNotification(t('app.noticeCanvasExported', {
+        file: result.fileName
+      }))
+    }
+  } catch {
+    showNotification(t('app.noticeCanvasExportFailed'))
+  }
+}
+
+function findQueryTable(
+  queryModel: QueryModel,
+  tableId: string
+): QueryTable | undefined {
+  for (const table of queryModel.tables) {
+    if (table.id === tableId) {
+      return table
+    }
+
+    if (table.source?.kind === 'subquery') {
+      const nestedTable = findQueryTable(table.source.query, tableId)
+
+      if (nestedTable) {
+        return nestedTable
+      }
+    }
+  }
+
+  for (const operation of queryModel.setOperations ?? []) {
+    const setTable = findQueryTable(operation.query, tableId)
+
+    if (setTable) {
+      return setTable
+    }
+  }
+
+  return undefined
+}
+
+function collectQueryTableIds(
+  queryModel: QueryModel,
+  tableIds = new Set<string>()
+): Set<string> {
+  queryModel.tables.forEach((table) => {
+    tableIds.add(table.id)
+
+    if (table.source?.kind === 'subquery') {
+      collectQueryTableIds(table.source.query, tableIds)
+    }
+  })
+
+  queryModel.setOperations?.forEach((operation) => {
+    collectQueryTableIds(operation.query, tableIds)
+  })
+
+  return tableIds
+}
+
 async function ensureColumns(table: QueryTable): Promise<void> {
+  if (table.source?.kind === 'subquery') {
+    columnsByTable.value = {
+      ...columnsByTable.value,
+      [table.id]: table.source.query.selectedFields.map((field, index) => ({
+        name: field.alias.trim()
+          || (
+            field.expression
+              ? `expression_${index + 1}`
+              : field.field.columnName
+          ),
+        ordinalPosition: index + 1,
+        dataType: 'derived',
+        columnType: 'derived',
+        nullable: true,
+        primaryKey: false,
+        indexed: false,
+        extra: '',
+        comment: ''
+      }))
+    }
+    return
+  }
+
+  if (columnsByTable.value[table.id]) {
+    return
+  }
+
   const databaseName = selectedDatabase.value
 
-  if (!databaseName || columnsByTable.value[table.id]) {
+  if (!databaseName) {
     return
   }
 
@@ -869,9 +1026,7 @@ async function ensureColumns(table: QueryTable): Promise<void> {
   const request = (async () => {
     try {
       const response = await getColumns(table.name, databaseName)
-      const currentTable = model.value.tables.find(
-        (item) => item.id === table.id
-      )
+      const currentTable = findQueryTable(model.value, table.id)
 
       if (
         databaseName !== selectedDatabase.value
@@ -887,7 +1042,7 @@ async function ensureColumns(table: QueryTable): Promise<void> {
     } catch (error) {
       if (
         databaseName !== selectedDatabase.value
-        || !model.value.tables.some((item) => item.id === table.id)
+        || !findQueryTable(model.value, table.id)
       ) {
         return
       }
@@ -906,12 +1061,31 @@ async function ensureColumns(table: QueryTable): Promise<void> {
   return request
 }
 
+function handleSqlEditingChange(value: boolean): void {
+  isSqlEditing.value = value
+}
+
+function handleSqlModelSaved(nextModel: QueryModel): void {
+  applyImportedModel(nextModel)
+  const nextTableIds = collectQueryTableIds(model.value)
+
+  columnsByTable.value = Object.fromEntries(
+    Object.entries(columnsByTable.value).filter(([tableId]) =>
+      nextTableIds.has(tableId)
+    )
+  )
+  activeModel.value.tables.forEach((table) => {
+    void ensureColumns(table)
+  })
+  showNotification(t('app.noticeSqlApplied'))
+}
+
 function nextTablePosition(): CanvasPosition {
-  const index = model.value.tables.length
+  const index = activeModel.value.tables.length
 
   return {
-    x: 40 + (index % 3) * 285,
-    y: 40 + Math.floor(index / 3) * 250
+    x: 30 + (index % 4) * 220,
+    y: 30 + Math.floor(index / 4) * 205
   }
 }
 
@@ -932,7 +1106,7 @@ async function handleSchemaField(
   table: SchemaTable,
   column: SchemaColumn
 ): Promise<void> {
-  const queryTable = model.value.tables.find(
+  const queryTable = activeModel.value.tables.find(
     (item) => item.name === table.name
   ) ?? await addTableToCanvas(table.name)
 
@@ -940,15 +1114,17 @@ async function handleSchemaField(
 }
 
 function handleRemoveTable(tableId: string): void {
-  const table = model.value.tables.find((item) => item.id === tableId)
+  const table = activeModel.value.tables.find(
+    (item) => item.id === tableId
+  )
 
   if (!table) {
     return
   }
 
-  const affectedCount = model.value.selectedFields.filter(
+  const affectedCount = activeModel.value.selectedFields.filter(
     (field) => field.field.tableId === tableId
-  ).length + model.value.joins.filter(
+  ).length + activeModel.value.joins.filter(
     (join) =>
       join.left.tableId === tableId || join.right.tableId === tableId
   ).length
@@ -975,10 +1151,10 @@ function handleCreateJoin(
   source: FieldReference,
   target: FieldReference
 ): void {
-  const sourceIndex = model.value.tables.findIndex(
+  const sourceIndex = activeModel.value.tables.findIndex(
     (table) => table.id === source.tableId
   )
-  const targetIndex = model.value.tables.findIndex(
+  const targetIndex = activeModel.value.tables.findIndex(
     (table) => table.id === target.tableId
   )
 
@@ -988,7 +1164,7 @@ function handleCreateJoin(
 
   const left = sourceIndex < targetIndex ? source : target
   const right = sourceIndex < targetIndex ? target : source
-  const duplicate = model.value.joins.some((join) =>
+  const duplicate = activeModel.value.joins.some((join) =>
     (
       join.left.tableId === left.tableId
       && join.right.tableId === right.tableId
@@ -1015,10 +1191,10 @@ function handleCreateJoin(
     return
   }
 
-  const leftTable = model.value.tables.find(
+  const leftTable = activeModel.value.tables.find(
     (table) => table.id === left.tableId
   )
-  const rightTable = model.value.tables.find(
+  const rightTable = activeModel.value.tables.find(
     (table) => table.id === right.tableId
   )
 
@@ -1029,7 +1205,7 @@ function handleCreateJoin(
 }
 
 function handleUpdateJoinType(joinId: string, type: JoinType): void {
-  setJoins(model.value.joins.map((join) =>
+  setJoins(activeModel.value.joins.map((join) =>
     join.id === joinId
       ? { ...join, type }
       : join
@@ -1150,6 +1326,7 @@ async function handleClearStoredState(): Promise<void> {
   expandInspectorDrawer(defaultQueryInspectorWidth)
   expandWorkspaceDrawer(defaultWorkspacePanelHeight)
   quoteIdentifiers.value = false
+  namedParameterValues.value = {}
 
   await nextTick()
   workspacePersistenceEnabled = true
@@ -1164,7 +1341,7 @@ async function refreshDatabases(): Promise<void> {
 }
 
 async function beginDatabaseEdit(): Promise<void> {
-  if (!health.value) {
+  if (!health.value || isSqlEditing.value) {
     return
   }
 
@@ -1239,12 +1416,77 @@ function handleDatabaseConnectionApplied(
   }))
 }
 
+async function handleApiSourceApplied(
+  provider: ApiProvider
+): Promise<void> {
+  isEnvironmentSettingsOpen.value = false
+  connectionFailed.value = false
+  authenticationRequired.value = false
+  health.value = null
+  databases.value = []
+  selectedDatabase.value = ''
+  isEditingDatabase.value = false
+  reset()
+  savedAt.value = null
+  columnsByTable.value = {}
+  maximizedRegion.value = null
+
+  try {
+    health.value = await getHealth()
+    const databaseResponse = await getDatabases()
+    databases.value = databaseResponse.databases
+    selectedDatabase.value = health.value.database.name
+    showNotification(t('settings.apiApplied', {
+      provider: provider === 'fastify'
+        ? t('settings.databaseMode')
+        : provider === 'session'
+          ? t('settings.sessionMode')
+          : t('settings.apiMode')
+    }))
+  } catch (error) {
+    const authenticationError = isAuthenticationRequiredError(error)
+
+    if (authenticationError) {
+      authenticationRequired.value = true
+      isEnvironmentSettingsOpen.value = true
+    } else {
+      connectionFailed.value = true
+    }
+
+    showNotification(
+      authenticationError
+        ? authenticationRequiredLabel.value
+        : error instanceof Error
+        ? error.message
+        : t('app.connectionFailed')
+    )
+  }
+}
+
+function handleLaravelSignedOut(): void {
+  authenticationRequired.value = true
+  connectionFailed.value = false
+  health.value = null
+  databases.value = []
+  selectedDatabase.value = ''
+  isEditingDatabase.value = false
+  reset()
+  savedAt.value = null
+  columnsByTable.value = {}
+  maximizedRegion.value = null
+  showNotification(t('settings.laravelSignedOut'))
+}
+
 function handleHistoryShortcut(event: KeyboardEvent): void {
   const target = event.target as HTMLElement | null
 
   if (event.key === 'Escape' && maximizedRegion.value) {
     event.preventDefault()
     maximizedRegion.value = null
+    return
+  }
+
+  if (isSqlEditing.value) {
     return
   }
 
@@ -1274,9 +1516,9 @@ function handleHistoryShortcut(event: KeyboardEvent): void {
 }
 
 watch(
-  () => model.value.tables.map((table) => table.id).join(','),
+  () => activeModel.value.tables.map((table) => table.id).join(','),
   () => {
-    model.value.tables.forEach((table) => {
+    activeModel.value.tables.forEach((table) => {
       void ensureColumns(table)
     })
   },
@@ -1294,6 +1536,7 @@ watch(
     workspacePanelHeight,
     isWorkspaceDrawerCollapsed,
     quoteIdentifiers,
+    namedParameterValues,
     uiScale
   ],
   scheduleWorkspaceSave
@@ -1326,6 +1569,7 @@ onMounted(async () => {
     setQueryInspectorWidth(workspaceState.queryInspectorWidth)
     setWorkspacePanelHeight(workspaceState.workspacePanelHeight)
     quoteIdentifiers.value = workspaceState.quoteIdentifiers
+    namedParameterValues.value = workspaceState.namedParameterValues ?? {}
   } else {
     setWorkspacePanelHeight(
       Math.round((getLogicalViewportHeight() - 64) * 0.25)
@@ -1353,8 +1597,14 @@ onMounted(async () => {
         ? null
         : restoredDate
     }
-  } catch {
-    connectionFailed.value = true
+  } catch (error) {
+    if (isAuthenticationRequiredError(error)) {
+      authenticationRequired.value = true
+      isEnvironmentSettingsOpen.value = true
+      showNotification(authenticationRequiredLabel.value)
+    } else {
+      connectionFailed.value = true
+    }
   } finally {
     workspacePersistenceEnabled = true
     scheduleWorkspaceSave()
@@ -1401,20 +1651,40 @@ onBeforeUnmount(() => {
       </div>
 
       <div class="application-actions">
-        <button type="button" @click="handleNewQuery">
+        <button
+          type="button"
+          :disabled="isSqlEditing"
+          @click="handleNewQuery"
+        >
           {{ t('app.new') }}
         </button>
-        <button type="button" :disabled="!canUndo" @click="undo">
+        <button
+          type="button"
+          :disabled="isSqlEditing || !canUndo"
+          @click="undo"
+        >
           {{ t('app.undo') }}
         </button>
-        <button type="button" :disabled="!canRedo" @click="redo">
+        <button
+          type="button"
+          :disabled="isSqlEditing || !canRedo"
+          @click="redo"
+        >
           {{ t('app.redo') }}
         </button>
         <span class="toolbar-divider" aria-hidden="true"></span>
-        <button type="button" @click="handleDownloadQueryFile">
+        <button
+          type="button"
+          :disabled="isSqlEditing"
+          @click="handleDownloadQueryFile"
+        >
           {{ t('app.save') }}
         </button>
-        <button type="button" @click="openQueryFilePicker">
+        <button
+          type="button"
+          :disabled="isSqlEditing"
+          @click="openQueryFilePicker"
+        >
           {{ t('app.load') }}
         </button>
         <input
@@ -1427,6 +1697,7 @@ onBeforeUnmount(() => {
         <button
           class="clear-state-button"
           type="button"
+          :disabled="isSqlEditing"
           @click="handleClearStoredState"
         >
           {{ t('app.clearState') }}
@@ -1446,8 +1717,11 @@ onBeforeUnmount(() => {
           :class="{ 'connection-status__dot--error': connectionFailed }"
           aria-hidden="true"
         ></span>
-        <template v-if="health">
-          <span>MariaDB {{ health.database.version }} ·</span>
+        <template v-if="health && !authenticationRequired">
+          <span>
+            {{ apiProviderLabel }}
+            · MariaDB {{ health.database.version }} ·
+          </span>
           <select
             v-if="isEditingDatabase"
             ref="databaseSelect"
@@ -1470,6 +1744,7 @@ onBeforeUnmount(() => {
             v-else
             class="database-name"
             type="button"
+            :disabled="isSqlEditing"
             :title="t('app.editDatabase')"
             :aria-label="t('app.editDatabase')"
             @dblclick="beginDatabaseEdit"
@@ -1478,6 +1753,9 @@ onBeforeUnmount(() => {
             {{ selectedDatabase }}
           </button>
         </template>
+        <span v-else-if="authenticationRequired">
+          {{ authenticationRequiredLabel }}
+        </span>
         <span v-else-if="connectionFailed">
           {{ t('app.connectionFailed') }}
         </span>
@@ -1488,6 +1766,7 @@ onBeforeUnmount(() => {
       <button
         class="environment-settings-button"
         type="button"
+        :disabled="isSqlEditing"
         :aria-label="t('app.environmentSettings')"
         :title="t('app.environmentSettings')"
         @click="isEnvironmentSettingsOpen = true"
@@ -1525,8 +1804,10 @@ onBeforeUnmount(() => {
     >
       <aside
         class="workspace__sidebar"
+        :class="{ 'query-model-locked': isSqlEditing }"
         :aria-hidden="isSchemaDrawerCollapsed"
-        :inert="isSchemaDrawerCollapsed"
+        :aria-disabled="isSqlEditing"
+        :inert="isSchemaDrawerCollapsed || isSqlEditing"
       >
         <SchemaExplorer
           :database-name="selectedDatabase"
@@ -1592,12 +1873,71 @@ onBeforeUnmount(() => {
             class="workbench__canvas"
             :class="{
               'workspace-region--maximized':
-                maximizedRegion === 'canvas'
+                maximizedRegion === 'canvas',
+              'query-model-locked': isSqlEditing
             }"
+            :aria-disabled="isSqlEditing"
           >
+            <nav
+              v-if="queryBreadcrumbs.length > 0"
+              class="query-breadcrumb"
+              :aria-label="t('canvas.queryBreadcrumb')"
+            >
+              <button
+                type="button"
+                @click="navigateToQueryDepth(0)"
+              >
+                {{ t('canvas.mainQuery') }}
+              </button>
+              <template
+                v-for="(breadcrumb, index) in queryBreadcrumbs"
+                :key="breadcrumb.tableId"
+              >
+                <span aria-hidden="true">›</span>
+                <button
+                  type="button"
+                  :disabled="index === queryBreadcrumbs.length - 1"
+                  @click="navigateToQueryDepth(index + 1)"
+                >
+                  {{ breadcrumb.label }}
+                </button>
+              </template>
+            </nav>
+            <nav
+              v-if="activeModel.setOperations?.length"
+              class="set-operation-navigation"
+              :class="{
+                'set-operation-navigation--with-breadcrumb':
+                  queryBreadcrumbs.length > 0
+              }"
+              :aria-label="t('canvas.setOperationNavigation')"
+            >
+              <button type="button" disabled>
+                SELECT 1
+              </button>
+              <button
+                v-for="(operation, index) in activeModel.setOperations"
+                :key="operation.id"
+                type="button"
+                @click="enterSetOperation(operation.id)"
+              >
+                {{ operation.operator }} {{ index + 2 }}
+              </button>
+            </nav>
+            <button
+              class="region-export-button"
+              type="button"
+              :disabled="isSqlEditing || activeModel.tables.length === 0"
+              :aria-label="t('app.exportCanvasPng')"
+              :title="t('app.exportCanvasPng')"
+              @click="exportQueryCanvasPng"
+            >
+              <ExportPngIcon />
+            </button>
             <button
               class="region-maximize-button"
               type="button"
+              :disabled="isSqlEditing"
               :aria-label="maximizedRegion === 'canvas'
                 ? t('app.restoreCanvas')
                 : t('app.maximizeCanvas')"
@@ -1611,8 +1951,11 @@ onBeforeUnmount(() => {
               />
             </button>
             <QueryCanvas
-              :model="model"
+              ref="queryCanvas"
+              :key="activeQueryPath.join('/') || 'main-query'"
+              :model="activeModel"
               :columns-by-table="columnsByTable"
+              :inert="isSqlEditing"
               @drop-table="addTableToCanvas"
               @set-field-selected="setFieldSelected"
               @create-join="handleCreateJoin"
@@ -1620,7 +1963,15 @@ onBeforeUnmount(() => {
               @move-table="moveTable"
               @remove-table="handleRemoveTable"
               @update-alias="updateTableAlias"
+              @open-subquery="enterSubquery"
             />
+            <div
+              v-if="isSqlEditing"
+              class="query-model-lock-message"
+              role="status"
+            >
+              {{ t('workspace.sqlEditingHint') }}
+            </div>
           </div>
 
           <div
@@ -1662,11 +2013,17 @@ onBeforeUnmount(() => {
             :model="model"
             :compile-result="compileResult"
             :quote-identifiers="quoteIdentifiers"
+            :named-parameter-values="namedParameterValues"
             :maximized="maximizedRegion === 'workspace'"
             :aria-hidden="isWorkspaceDrawerCollapsed"
             :inert="isWorkspaceDrawerCollapsed"
             @toggle-maximize="toggleMaximizedRegion('workspace')"
+            @editing-change="handleSqlEditingChange"
+            @save-model="handleSqlModelSaved"
             @update:quote-identifiers="quoteIdentifiers = $event"
+            @update:named-parameter-values="
+              namedParameterValues = $event
+            "
           />
         </div>
 
@@ -1704,12 +2061,15 @@ onBeforeUnmount(() => {
         </div>
 
         <QueryInspector
-          :model="model"
+          :class="{ 'query-model-locked': isSqlEditing }"
+          :model="activeModel"
           :columns-by-table="columnsByTable"
           :aria-hidden="isInspectorDrawerCollapsed"
-          :inert="isInspectorDrawerCollapsed"
+          :aria-disabled="isSqlEditing"
+          :inert="isInspectorDrawerCollapsed || isSqlEditing"
           @update-field="updateSelectedField"
           @reorder-field="reorderSelectedField"
+          @set-distinct="setDistinct"
           @add-join="addJoin"
           @set-joins="setJoins"
           @set-filters="setFilters"
@@ -1725,7 +2085,9 @@ onBeforeUnmount(() => {
     <EnvironmentSettingsDialog
       :open="isEnvironmentSettingsOpen"
       @applied="handleDatabaseConnectionApplied"
+      @api-source-applied="handleApiSourceApplied"
       @close="isEnvironmentSettingsOpen = false"
+      @laravel-signed-out="handleLaravelSignedOut"
     />
 
     <div

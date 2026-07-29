@@ -60,6 +60,22 @@ describe('MariaDB query compiler', () => {
     expect(result.parameters).toEqual([])
   })
 
+  test('keeps source SQL as presentation metadata only', () => {
+    const model = singleTableModel()
+    model.sourceSql = 'SELECT  M.id\\nFROM orders M'
+
+    const result = compileQuery(model)
+
+    expect(result.status).toBe('valid')
+    expect(result.sql).toBe([
+      'Select',
+      '  `orders`.`id`',
+      'From `orders`'
+    ].join('\n'))
+    expect(deserializeQueryModel(serializeQueryModel(model)).sourceSql)
+      .toBe(model.sourceSql)
+  })
+
   test('compiles a manual LEFT JOIN and stable aliases', () => {
     const model = singleTableModel()
     model.tables[0]!.alias = 'o'
@@ -348,6 +364,44 @@ describe('MariaDB query compiler', () => {
     expect(result.sql).toContain('Group By `orders`.`customer_id`')
   })
 
+  test('allows MariaDB non-strict GROUP BY output fields', () => {
+    const model = singleTableModel()
+    model.selectedFields[0]!.field.columnName = 'customer_id'
+    model.selectedFields.push({
+      id: 'customer-name',
+      field: {
+        tableId: 'orders',
+        columnName: 'customer_name'
+      },
+      alias: '',
+      aggregate: 'none',
+      distinct: false
+    })
+    model.selectedFields.push({
+      id: 'count',
+      field: {
+        tableId: 'orders',
+        columnName: 'id'
+      },
+      alias: 'order_count',
+      aggregate: 'COUNT',
+      distinct: false
+    })
+    model.grouping.push({
+      id: 'group-customer',
+      field: {
+        tableId: 'orders',
+        columnName: 'customer_id'
+      }
+    })
+
+    const result = compileQuery(model)
+
+    expect(result.status).toBe('valid')
+    expect(result.sql).toContain('`orders`.`customer_name`')
+    expect(result.sql).toContain('Group By `orders`.`customer_id`')
+  })
+
   test('compiles sorting and parameterized pagination', () => {
     const model = singleTableModel()
     model.sorting.push({
@@ -368,6 +422,495 @@ describe('MariaDB query compiler', () => {
     expect(result.sql).toContain('Order By `orders`.`created_at` Desc')
     expect(result.sql).toContain('Limit ?\nOffset ?')
     expect(result.parameters).toEqual([25, 50])
+  })
+
+  test('compiles structured expressions and custom parameters', () => {
+    const model = singleTableModel()
+    model.tables[0]!.alias = 'M'
+    model.tables.push(table('detail', 'details', 'D'))
+    model.selectedFields[0] = {
+      ...model.selectedFields[0]!,
+      field: {
+        tableId: 'orders',
+        columnName: 'delivery_date'
+      },
+      expression: {
+        kind: 'function',
+        name: 'formatDateStr',
+        arguments: [{
+          kind: 'field',
+          field: {
+            tableId: 'orders',
+            columnName: 'delivery_date'
+          }
+        }]
+      },
+      alias: 'delivery_date'
+    }
+    model.selectedFields.push({
+      id: 'signed-quantity',
+      field: {
+        tableId: 'detail',
+        columnName: 'quantity'
+      },
+      expression: {
+        kind: 'binary',
+        operator: '*',
+        left: {
+          kind: 'field',
+          field: {
+            tableId: 'detail',
+            columnName: 'quantity'
+          }
+        },
+        right: {
+          kind: 'literal',
+          value: -1
+        }
+      },
+      alias: 'signed_quantity',
+      aggregate: 'none',
+      distinct: false
+    })
+    model.joins.push({
+      id: 'join-detail',
+      type: 'JOIN',
+      left: {
+        tableId: 'orders',
+        columnName: 'id'
+      },
+      right: {
+        tableId: 'detail',
+        columnName: 'order_id'
+      },
+      conditions: {
+        id: 'join-conditions',
+        kind: 'group',
+        conjunction: 'AND',
+        children: [{
+          id: 'join-active',
+          kind: 'condition',
+          field: {
+            tableId: 'detail',
+            columnName: 'active'
+          },
+          operator: '=',
+          value: true
+        }]
+      }
+    })
+    model.filters.children.push({
+      id: 'delivery-from',
+      kind: 'condition',
+      field: {
+        tableId: 'orders',
+        columnName: 'delivery_date'
+      },
+      operator: '>=',
+      value: {
+        kind: 'parameter',
+        name: 'delivery_from'
+      }
+    })
+    model.sorting.push({
+      id: 'sort-delivery',
+      field: {
+        tableId: 'orders',
+        columnName: 'delivery_date'
+      },
+      outputReference: 'delivery_date',
+      direction: 'ASC'
+    })
+
+    const result = compileQuery(model)
+
+    expect(result.status).toBe('valid')
+    expect(result.sql).toContain(
+      'formatDateStr(`M`.`delivery_date`) As `delivery_date`'
+    )
+    expect(result.sql).toContain(
+      '(`D`.`quantity` * ?) As `signed_quantity`'
+    )
+    expect(result.sql).toContain('  And (`D`.`active` = ?)')
+    expect(result.sql).toContain(
+      'Where `M`.`delivery_date` >= @delivery_from'
+    )
+    expect(result.sql).toContain('Order By `delivery_date` Asc')
+    expect(result.parameters).toEqual([-1, true])
+    expect(result.namedParameters).toEqual(['delivery_from'])
+  })
+
+  test('binds provided custom parameter values', () => {
+    const model = singleTableModel()
+    model.filters.children.push({
+      id: 'delivery-from',
+      kind: 'condition',
+      field: {
+        tableId: 'orders',
+        columnName: 'delivery_date'
+      },
+      operator: '>=',
+      value: {
+        kind: 'parameter',
+        name: 'delivery_from'
+      }
+    })
+
+    const result = compileQuery(model, {
+      delivery_from: '20260701'
+    })
+
+    expect(result.status).toBe('valid')
+    expect(result.sql).toContain(
+      'Where `orders`.`delivery_date` >= ?'
+    )
+    expect(result.parameters).toEqual(['20260701'])
+    expect(result.namedParameters).toEqual([])
+  })
+
+  test('compiles SELECT DISTINCT with a derived table JOIN', () => {
+    const subquery = singleTableModel()
+    subquery.tables[0]!.alias = 'M2'
+    subquery.selectedFields[0]!.field.columnName = 'delivery_no'
+    subquery.filters.children.push({
+      id: 'subquery-type',
+      kind: 'condition',
+      field: {
+        tableId: 'orders',
+        columnName: 'transaction_type'
+      },
+      operator: 'IN',
+      value: ['51']
+    })
+
+    const model = singleTableModel()
+    model.distinct = true
+    model.tables[0]!.alias = 'M'
+    model.tables.push({
+      id: 'derived-orders',
+      name: 'T2',
+      alias: 'T2',
+      position: {
+        x: 320,
+        y: 40
+      },
+      source: {
+        kind: 'subquery',
+        query: subquery
+      }
+    })
+    model.selectedFields.push({
+      id: 'customer-order',
+      field: {
+        tableId: 'derived-orders',
+        columnName: 'customer_order_no'
+      },
+      alias: '',
+      aggregate: 'none',
+      distinct: false
+    })
+    model.joins.push({
+      id: 'join-derived',
+      type: 'JOIN',
+      left: {
+        tableId: 'orders',
+        columnName: 'delivery_no'
+      },
+      right: {
+        tableId: 'derived-orders',
+        columnName: 'delivery_no'
+      }
+    })
+    model.filters.children.push({
+      id: 'outer-date',
+      kind: 'condition',
+      field: {
+        tableId: 'orders',
+        columnName: 'delivery_date'
+      },
+      operator: '>=',
+      value: {
+        kind: 'parameter',
+        name: 'delivery_from'
+      }
+    })
+
+    const result = compileQuery(model)
+
+    expect(result.status).toBe('valid')
+    expect(result.sql).toContain('Select Distinct')
+    expect(result.sql).toContain(
+      '  Join (\n'
+        + '    Select\n'
+        + '      `M2`.`delivery_no`\n'
+        + '    From `orders` As `M2`'
+    )
+    expect(result.sql).toContain('  ) As `T2`')
+    expect(result.sql).toContain(
+      '  On `M`.`delivery_no` = `T2`.`delivery_no`'
+    )
+    expect(result.parameters).toEqual(['51'])
+    expect(result.namedParameters).toEqual(['delivery_from'])
+  })
+
+  test('compiles scalar subqueries and ORDER BY expressions', () => {
+    const model = singleTableModel()
+    model.tables[0]!.alias = 'W'
+    model.selectedFields.push({
+      id: 'constant-mark',
+      field: {
+        tableId: 'orders',
+        columnName: 'mark'
+      },
+      expression: {
+        kind: 'literal',
+        value: ''
+      },
+      alias: 'mark',
+      aggregate: 'none',
+      distinct: false
+    })
+
+    const scalarQuery = singleTableModel()
+    scalarQuery.tables[0]!.id = 'detail'
+    scalarQuery.tables[0]!.alias = 'D'
+    scalarQuery.selectedFields[0]!.field.tableId = 'detail'
+    scalarQuery.externalTables = [{
+      id: 'orders',
+      alias: 'W'
+    }]
+    scalarQuery.selectedFields[0] = {
+      ...scalarQuery.selectedFields[0]!,
+      expression: {
+        kind: 'aggregate',
+        name: 'GROUP_CONCAT',
+        argument: {
+          kind: 'field',
+          field: {
+            tableId: 'detail',
+            columnName: 'quantity'
+          }
+        },
+        distinct: false,
+        ordering: [{
+          expression: {
+            kind: 'field',
+            field: {
+              tableId: 'detail',
+              columnName: 'delivery_date'
+            }
+          },
+          direction: 'ASC'
+        }]
+      }
+    }
+    scalarQuery.filters.children.push({
+      id: 'correlated-product',
+      kind: 'condition',
+      field: {
+        tableId: 'detail',
+        columnName: 'product_id'
+      },
+      operator: '=',
+      rightExpression: {
+        kind: 'field',
+        field: {
+          tableId: 'orders',
+          columnName: 'product_id'
+        }
+      }
+    })
+    model.selectedFields.push({
+      id: 'scalar-total',
+      field: {
+        tableId: 'orders',
+        columnName: 'total'
+      },
+      expression: {
+        kind: 'subquery',
+        query: scalarQuery
+      },
+      alias: 'total',
+      aggregate: 'none',
+      distinct: false
+    })
+    model.sorting.push({
+      id: 'sort-fallback',
+      field: {
+        tableId: 'orders',
+        columnName: 'sort_no'
+      },
+      expression: {
+        kind: 'function',
+        name: 'IfNull',
+        arguments: [
+          {
+            kind: 'field',
+            field: {
+              tableId: 'orders',
+              columnName: 'sort_no'
+            }
+          },
+          {
+            kind: 'literal',
+            value: 999
+          }
+        ]
+      },
+      direction: 'ASC'
+    })
+
+    const result = compileQuery(model)
+
+    expect(result.status).toBe('valid')
+    expect(result.sql).toContain('? As `mark`')
+    expect(result.sql).toContain(
+      'GROUP_CONCAT(`D`.`quantity` Order By `D`.`delivery_date` Asc)'
+    )
+    expect(result.sql).toContain(
+      'Where `D`.`product_id` = `W`.`product_id`'
+    )
+    expect(result.sql).toContain(
+      'Order By IfNull(`W`.`sort_no`, ?) Asc'
+    )
+    expect(result.parameters).toEqual(['', 999])
+  })
+
+  test('compiles CASE expressions with expression branches', () => {
+    const model = createEmptyQueryModel()
+    model.tables.push(table('product', 'prod', 'P'))
+    model.selectedFields.push({
+      id: 'process-label',
+      field: {
+        tableId: 'product',
+        columnName: 'proc7'
+      },
+      expression: {
+        kind: 'case',
+        branches: [{
+          when: {
+            kind: 'binary',
+            operator: '=',
+            left: {
+              kind: 'field',
+              field: {
+                tableId: 'product',
+                columnName: 'proc7'
+              }
+            },
+            right: {
+              kind: 'literal',
+              value: '0'
+            }
+          },
+          then: {
+            kind: 'literal',
+            value: '炖: NO'
+          }
+        }],
+        elseExpression: {
+          kind: 'literal',
+          value: '炖:YES'
+        }
+      },
+      alias: 'proc7',
+      aggregate: 'none',
+      distinct: false
+    })
+
+    const result = compileQuery(model)
+
+    expect(result.status).toBe('valid')
+    expect(result.sql).toContain(
+      'Case When (`P`.`proc7` = ?) Then ? Else ? End As `proc7`'
+    )
+    expect(result.parameters).toEqual(['0', '炖: NO', '炖:YES'])
+  })
+
+  test('compiles UNION, IN subqueries, and self JOIN conditions', () => {
+    const model = createEmptyQueryModel()
+    model.tables.push(
+      table('orders', 'orders', 'O'),
+      table('product', 'prod', 'P')
+    )
+    model.selectedFields.push({
+      id: 'order-id',
+      field: {
+        tableId: 'orders',
+        columnName: 'id'
+      },
+      alias: '',
+      aggregate: 'none',
+      distinct: false
+    })
+    model.joins.push({
+      id: 'self-product-join',
+      type: 'JOIN',
+      joinedTableId: 'product',
+      left: {
+        tableId: 'product',
+        columnName: 'id'
+      },
+      right: {
+        tableId: 'product',
+        columnName: 'id'
+      }
+    })
+
+    const filterSubquery = createEmptyQueryModel()
+    filterSubquery.tables.push(table('allowed', 'allowed_orders', 'A'))
+    filterSubquery.selectedFields.push({
+      id: 'allowed-id',
+      field: {
+        tableId: 'allowed',
+        columnName: 'order_id'
+      },
+      alias: '',
+      aggregate: 'none',
+      distinct: true
+    })
+
+    const unionQuery = createEmptyQueryModel()
+    unionQuery.tables.push(table('archive', 'archived_orders', 'R'))
+    unionQuery.selectedFields.push({
+      id: 'archive-id',
+      field: {
+        tableId: 'archive',
+        columnName: 'id'
+      },
+      alias: '',
+      aggregate: 'none',
+      distinct: false
+    })
+    unionQuery.filters.children.push({
+      id: 'archive-allowed',
+      kind: 'condition',
+      field: {
+        tableId: 'archive',
+        columnName: 'id'
+      },
+      operator: 'IN',
+      rightExpression: {
+        kind: 'subquery',
+        query: filterSubquery
+      }
+    })
+    model.setOperations = [{
+      id: 'union-archive',
+      operator: 'UNION',
+      query: unionQuery
+    }]
+
+    const result = compileQuery(model)
+
+    expect(result.status).toBe('valid')
+    expect(result.sql).toContain(
+      'Join `prod` As `P`\n  On `P`.`id` = `P`.`id`'
+    )
+    expect(result.sql).toContain('\nUnion\nSelect')
+    expect(result.sql).toContain(
+      '`R`.`id` In (\n  Select\n    `A`.`order_id`'
+    )
   })
 
   test('escapes special characters in identifiers', () => {

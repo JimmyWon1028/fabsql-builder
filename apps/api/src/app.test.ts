@@ -364,6 +364,73 @@ describe('query execution API', () => {
     expect(queryExecutions).toEqual([])
   })
 
+  test('rejects unresolved custom query parameters', async () => {
+    const app = createTestApplication()
+    const model = executableQueryModel()
+    model.filters.children.push({
+      id: 'custom-date',
+      kind: 'condition',
+      field: {
+        tableId: model.tables[0]!.id,
+        columnName: 'orddt'
+      },
+      operator: '>=',
+      value: {
+        kind: 'parameter',
+        name: 'orddt'
+      }
+    })
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/query/run',
+      payload: {
+        schema: 'lysm',
+        model
+      }
+    })
+
+    expect(response.statusCode).toBe(400)
+    expect(response.json()).toEqual({
+      message: 'Custom query parameters require values before execution.'
+    })
+    expect(queryExecutions).toEqual([])
+  })
+
+  test('runs with provided custom query parameter values', async () => {
+    const app = createTestApplication()
+    const model = executableQueryModel()
+    model.filters.children.push({
+      id: 'custom-date',
+      kind: 'condition',
+      field: {
+        tableId: model.tables[0]!.id,
+        columnName: 'orddt'
+      },
+      operator: '>=',
+      value: {
+        kind: 'parameter',
+        name: 'orddt'
+      }
+    })
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/query/run',
+      payload: {
+        schema: 'lysm',
+        model,
+        namedParameters: {
+          orddt: '20260701'
+        }
+      }
+    })
+
+    expect(response.statusCode).toBe(200)
+    expect(queryExecutions[0]?.parameters).toEqual([
+      '20260701',
+      201
+    ])
+  })
+
   test('limits large result sets to 200 rows', async () => {
     const largeResultExecutor: QueryExecutor = {
       async execute() {

@@ -25,11 +25,15 @@ const props = defineProps<{
   model: QueryModel
   compileResult: CompileQueryResult
   quoteIdentifiers: boolean
+  namedParameterValues: Record<string, string>
   maximized: boolean
 }>()
 
 const emit = defineEmits<{
+  'editing-change': [value: boolean]
+  'save-model': [model: QueryModel]
   'update:quoteIdentifiers': [value: boolean]
+  'update:namedParameterValues': [value: Record<string, string>]
   toggleMaximize: []
 }>()
 const { t } = useApplicationPreferences()
@@ -38,6 +42,11 @@ const activeTab = ref<WorkspaceTab>('preview')
 const isResultTabOpen = ref(true)
 const copied = ref(false)
 const isRunning = ref(false)
+const isEditingSql = ref(false)
+const isSavingSql = ref(false)
+const sqlDraft = ref('')
+const sqlEditError = ref('')
+const editingParameters = ref<CompileQueryResult['parameters']>([])
 const executionError = ref('')
 const executionResult = ref<ExecuteQueryResponse | null>(null)
 let executionSequence = 0
@@ -62,14 +71,43 @@ function removeIdentifierQuotes(sql: string): string {
   )
 }
 
-const displaySql = computed(() => props.quoteIdentifiers
-  ? props.compileResult.sql
-  : removeIdentifierQuotes(props.compileResult.sql)
-)
+const displaySql = computed(() => {
+  if (
+    props.model.sourceSql !== undefined
+    && !props.quoteIdentifiers
+  ) {
+    return removeIdentifierQuotes(props.model.sourceSql)
+  }
+
+  return props.quoteIdentifiers
+    ? props.compileResult.sql
+    : removeIdentifierQuotes(props.compileResult.sql)
+})
 
 const highlightedSql = computed(() =>
   highlightSql(displaySql.value)
 )
+const sqlForClipboard = computed(() =>
+  isEditingSql.value ? sqlDraft.value : displaySql.value
+)
+const executionNamedParameterValues = computed(() =>
+  Object.fromEntries(
+    props.compileResult.namedParameters.map((name) => [
+      name,
+      props.namedParameterValues[name] ?? ''
+    ])
+  )
+)
+
+function updateNamedParameterValue(
+  name: string,
+  value: string
+): void {
+  emit('update:namedParameterValues', {
+    ...props.namedParameterValues,
+    [name]: value
+  })
+}
 
 watch(
   () => [props.databaseName, props.model],
@@ -78,6 +116,10 @@ watch(
     isRunning.value = false
     executionError.value = ''
     executionResult.value = null
+
+    if (isEditingSql.value) {
+      cancelSqlEditing()
+    }
   }
 )
 
@@ -95,12 +137,12 @@ function closeResultTab(): void {
 }
 
 async function copySql(): Promise<void> {
-  if (!displaySql.value) {
+  if (!sqlForClipboard.value) {
     return
   }
 
   try {
-    await navigator.clipboard.writeText(displaySql.value)
+    await navigator.clipboard.writeText(sqlForClipboard.value)
     copied.value = true
 
     if (copiedResetTimer) {
@@ -134,7 +176,11 @@ async function runPreviewQuery(): Promise<void> {
   executionResult.value = null
 
   try {
-    const result = await executeQuery(props.databaseName, props.model)
+    const result = await executeQuery(
+      props.databaseName,
+      props.model,
+      executionNamedParameterValues.value
+    )
 
     if (sequence === executionSequence) {
       executionResult.value = result
@@ -167,8 +213,103 @@ function localizedIssueMessage(issue: {
   return translated === key ? issue.message : translated
 }
 
+function setSqlEditing(value: boolean): void {
+  if (isEditingSql.value === value) {
+    return
+  }
+
+  isEditingSql.value = value
+  emit('editing-change', value)
+}
+
+function beginSqlEditing(): void {
+  if (!displaySql.value || isRunning.value) {
+    return
+  }
+
+  executionSequence += 1
+  isRunning.value = false
+  activeTab.value = 'preview'
+  sqlDraft.value = displaySql.value
+  editingParameters.value = [...props.compileResult.parameters]
+  sqlEditError.value = ''
+  setSqlEditing(true)
+}
+
+function cancelSqlEditing(): void {
+  if (isSavingSql.value) {
+    return
+  }
+
+  sqlDraft.value = ''
+  editingParameters.value = []
+  sqlEditError.value = ''
+  setSqlEditing(false)
+}
+
+function isSqlImportError(error: unknown): error is {
+  code: string
+  detail: string
+  message: string
+} {
+  return error instanceof Error
+    && error.name === 'SqlImportError'
+    && 'code' in error
+    && typeof error.code === 'string'
+    && 'detail' in error
+    && typeof error.detail === 'string'
+}
+
+async function saveSqlEditing(): Promise<void> {
+  if (
+    !isEditingSql.value
+    || isSavingSql.value
+    || !sqlDraft.value.trim()
+  ) {
+    return
+  }
+
+  isSavingSql.value = true
+
+  try {
+    const { parseSqlToQueryModel } = await import(
+      '../query-builder/parse-sql'
+    )
+    const nextModel = parseSqlToQueryModel(
+      sqlDraft.value,
+      props.model,
+      editingParameters.value
+    )
+
+    sqlEditError.value = ''
+    setSqlEditing(false)
+    emit('save-model', nextModel)
+    sqlDraft.value = ''
+    editingParameters.value = []
+  } catch (error) {
+    if (isSqlImportError(error)) {
+      const key = `workspace.sqlImport.${error.code}`
+      const localizedMessage = t(key)
+      sqlEditError.value = localizedMessage === key
+        ? error.message
+        : error.detail
+          ? `${localizedMessage} ${error.detail}`
+          : localizedMessage
+      return
+    }
+
+    sqlEditError.value = t('workspace.sqlImport.syntax')
+  } finally {
+    isSavingSql.value = false
+  }
+}
+
 onBeforeUnmount(() => {
   executionSequence += 1
+
+  if (isEditingSql.value) {
+    emit('editing-change', false)
+  }
 
   if (copiedResetTimer) {
     window.clearTimeout(copiedResetTimer)
@@ -210,6 +351,7 @@ onBeforeUnmount(() => {
         <label class="sql-preview__quote-option">
           <input
             :checked="quoteIdentifiers"
+            :disabled="isEditingSql"
             type="checkbox"
             @change="emit(
               'update:quoteIdentifiers',
@@ -219,29 +361,85 @@ onBeforeUnmount(() => {
           {{ t('workspace.quoteIdentifiers') }}
         </label>
         <span
+          v-if="isEditingSql"
+          class="compile-status compile-status--editing"
+        >
+          {{ t('workspace.sqlEditing') }}
+        </span>
+        <span
+          v-else
           class="compile-status"
           :class="`compile-status--${compileResult.status}`"
         >
           {{ statusLabel }}
         </span>
         <button
+          v-if="!isEditingSql"
+          type="button"
+          :disabled="!displaySql || isRunning"
+          @click="beginSqlEditing"
+        >
+          {{ t('workspace.editSql') }}
+        </button>
+        <template v-else>
+          <button
+            class="sql-preview__save-button"
+            type="button"
+            :disabled="isSavingSql || !sqlDraft.trim()"
+            @click="saveSqlEditing"
+          >
+            {{ isSavingSql
+              ? t('workspace.savingSql')
+              : t('workspace.saveSql') }}
+          </button>
+          <button
+            type="button"
+            :disabled="isSavingSql"
+            @click="cancelSqlEditing"
+          >
+            {{ t('workspace.cancelSql') }}
+          </button>
+        </template>
+        <button
           class="run-query-button"
           type="button"
-          :disabled="compileResult.status !== 'valid' || isRunning"
+          :disabled="isEditingSql
+            || compileResult.status !== 'valid'
+            || isRunning"
           @click="runPreviewQuery"
         >
           {{ isRunning ? t('workspace.running') : t('workspace.run') }}
         </button>
         <button
           type="button"
-          :disabled="!compileResult.sql"
+          :disabled="!sqlForClipboard"
           @click="copySql"
         >
           {{ copied ? t('workspace.copied') : t('workspace.copy') }}
         </button>
       </header>
 
-      <pre v-if="displaySql"><code><span
+      <div v-if="isEditingSql" class="sql-preview__editor-region">
+        <p class="sql-preview__editing-hint">
+          {{ t('workspace.sqlEditingHint') }}
+        </p>
+        <textarea
+          v-model="sqlDraft"
+          class="sql-preview__editor"
+          :aria-label="t('workspace.sqlEditorLabel')"
+          autocomplete="off"
+          autocapitalize="off"
+          spellcheck="false"
+        ></textarea>
+        <p
+          v-if="sqlEditError"
+          class="sql-preview__edit-error"
+          role="alert"
+        >
+          {{ sqlEditError }}
+        </p>
+      </div>
+      <pre v-else-if="displaySql"><code><span
         v-for="(token, index) in highlightedSql"
         :key="`${index}-${token.type}`"
         :class="token.type === 'plain'
@@ -258,7 +456,9 @@ onBeforeUnmount(() => {
         </p>
       </div>
 
-      <details v-if="compileResult.parameters.length > 0">
+      <details
+        v-if="!isEditingSql && compileResult.parameters.length > 0"
+      >
         <summary>
           {{ t('workspace.parameters', {
             count: compileResult.parameters.length
@@ -269,6 +469,35 @@ onBeforeUnmount(() => {
           null,
           2
         ) }}</code></pre>
+      </details>
+      <details
+        v-if="!isEditingSql && compileResult.namedParameters.length > 0"
+        class="sql-preview__named-parameters"
+      >
+        <summary>
+          {{ t('workspace.namedParameters', {
+            count: compileResult.namedParameters.length
+          }) }}
+        </summary>
+        <p>{{ t('workspace.namedParameterHint') }}</p>
+        <div class="named-parameter-grid">
+          <label
+            v-for="name in compileResult.namedParameters"
+            :key="name"
+          >
+            <span>@{{ name }}</span>
+            <input
+              :value="namedParameterValues[name] ?? ''"
+              type="text"
+              autocomplete="off"
+              spellcheck="false"
+              @input="updateNamedParameterValue(
+                name,
+                ($event.target as HTMLInputElement).value
+              )"
+            >
+          </label>
+        </div>
       </details>
     </section>
 
@@ -382,6 +611,7 @@ onBeforeUnmount(() => {
           id="query-workspace-result-tab"
           type="button"
           role="tab"
+          :disabled="isEditingSql"
           :aria-selected="activeTab === 'result'"
           aria-controls="query-workspace-result-panel"
           @click="selectTab('result')"
@@ -397,6 +627,7 @@ onBeforeUnmount(() => {
         <button
           type="button"
           class="query-workspace-tab__close"
+          :disabled="isEditingSql"
           :aria-label="t('workspace.closeResult')"
           :title="t('workspace.closeResult')"
           @click.stop="closeResultTab"

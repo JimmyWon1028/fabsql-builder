@@ -1,4 +1,7 @@
-import type { QueryModel } from './query-model.js'
+import type {
+  QueryModel,
+  QueryParameterValue
+} from './query-model.js'
 
 export type SchemaTableType = 'BASE TABLE' | 'VIEW'
 
@@ -87,6 +90,7 @@ export type QueryResultCell = string | number | boolean | null
 export interface ExecuteQueryRequest {
   schema: string
   model: QueryModel
+  namedParameters?: Record<string, QueryParameterValue>
 }
 
 export interface ExecuteQueryResponse {

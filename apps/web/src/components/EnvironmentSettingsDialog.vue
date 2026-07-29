@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type {
+  ApiProvider,
   ApplicationLocale,
   ApplicationTheme
 } from '../preferences/use-application-preferences'
@@ -25,6 +26,12 @@ import {
   getDatabaseConnectionSettings,
   testDatabaseConnection
 } from '../services/schema-api'
+import {
+  isLaravelAuthenticatedForUrl,
+  laravelAuthentication,
+  loginToLaravel,
+  logoutFromLaravel
+} from '../services/laravel-auth'
 
 const props = defineProps<{
   open: boolean
@@ -33,19 +40,31 @@ const props = defineProps<{
 const emit = defineEmits<{
   close: []
   applied: [response: DatabaseConnectionApplyResponse]
+  apiSourceApplied: [provider: ApiProvider]
+  laravelSignedOut: []
 }>()
 
-type SettingsSection = 'database' | 'language' | 'theme'
+type SettingsSection = 'api' | 'database' | 'language' | 'theme'
 
 const {
+  apiProvider,
+  laravelApiUrl,
   locale,
   theme,
+  setApiSource,
   setLocale,
   setTheme,
   t
 } = useApplicationPreferences()
-const activeSection = ref<SettingsSection>('database')
+const activeSection = ref<SettingsSection>('api')
 const dialog = ref<HTMLElement | null>(null)
+const selectedApiProvider = ref<ApiProvider>(apiProvider.value)
+const laravelUrl = ref(laravelApiUrl.value)
+const laravelEmail = ref('')
+const laravelPassword = ref('')
+const apiFeedback = ref('')
+const apiFeedbackType = ref<'success' | 'error' | ''>('')
+const isApiApplying = ref(false)
 const loadedSettings = ref<DatabaseConnectionSettings | null>(null)
 const password = ref('')
 const clearPassword = ref(false)
@@ -67,6 +86,21 @@ const form = reactive({
 
 const isBusy = computed(() =>
   isLoading.value || isTesting.value || isApplying.value
+)
+const isSelectedLaravelAuthenticated = computed(() => {
+  laravelAuthentication.value
+
+  return isLaravelAuthenticatedForUrl(laravelUrl.value)
+})
+const selectedLaravelUser = computed(() => {
+  if (!isSelectedLaravelAuthenticated.value) {
+    return null
+  }
+
+  return laravelAuthentication.value?.user ?? null
+})
+const activeApiProviderLabel = computed(() =>
+  apiProviderLabel(apiProvider.value)
 )
 
 const isFormComplete = computed(() =>
@@ -107,6 +141,18 @@ function connectionInput(): DatabaseConnectionInput {
     ...(password.value ? { password: password.value } : {}),
     ...(clearPassword.value ? { clearPassword: true } : {})
   }
+}
+
+function apiProviderLabel(provider: ApiProvider): string {
+  if (provider === 'fastify') {
+    return t('settings.databaseMode')
+  }
+
+  if (provider === 'session') {
+    return t('settings.sessionMode')
+  }
+
+  return t('settings.apiMode')
 }
 
 function showFeedback(
@@ -186,6 +232,7 @@ async function handleApply(): Promise<void> {
   try {
     const response = await applyDatabaseConnection(connectionInput())
     populateForm(response.settings)
+    setApiSource('fastify', laravelUrl.value)
     emit('applied', response)
   } catch (error) {
     showFeedback(
@@ -200,8 +247,107 @@ async function handleApply(): Promise<void> {
 }
 
 function handleClose(): void {
-  if (!isApplying.value) {
+  if (!isApplying.value && !isApiApplying.value) {
     emit('close')
+  }
+}
+
+function isValidLaravelUrl(value: string): boolean {
+  try {
+    const parsedUrl = new URL(value)
+    return parsedUrl.protocol === 'http:'
+      || parsedUrl.protocol === 'https:'
+  } catch {
+    return false
+  }
+}
+
+async function handleApplyApiSource(): Promise<void> {
+  if (isApiApplying.value) {
+    return
+  }
+
+  const normalizedUrl = laravelUrl.value.trim().replace(/\/+$/, '')
+
+  if (
+    selectedApiProvider.value !== 'fastify'
+    && !isValidLaravelUrl(normalizedUrl)
+  ) {
+    apiFeedback.value = t('settings.apiInvalidUrl')
+    apiFeedbackType.value = 'error'
+    return
+  }
+
+  if (
+    selectedApiProvider.value === 'laravel'
+    && !isSelectedLaravelAuthenticated.value
+    && (!laravelEmail.value.trim() || !laravelPassword.value)
+  ) {
+    apiFeedback.value = t('settings.laravelCredentialsRequired')
+    apiFeedbackType.value = 'error'
+    return
+  }
+
+  isApiApplying.value = true
+  apiFeedback.value = ''
+  apiFeedbackType.value = ''
+
+  try {
+    if (
+      selectedApiProvider.value === 'laravel'
+      && !isSelectedLaravelAuthenticated.value
+    ) {
+      const user = await loginToLaravel(
+        normalizedUrl,
+        laravelEmail.value.trim(),
+        laravelPassword.value
+      )
+
+      apiFeedback.value = t('settings.laravelSignedIn', {
+        email: user.email
+      })
+      apiFeedbackType.value = 'success'
+      laravelPassword.value = ''
+    }
+
+    setApiSource(selectedApiProvider.value, normalizedUrl)
+    laravelUrl.value = laravelApiUrl.value
+
+    if (!apiFeedback.value) {
+      apiFeedback.value = t('settings.apiApplied', {
+        provider: apiProviderLabel(selectedApiProvider.value)
+      })
+      apiFeedbackType.value = 'success'
+    }
+
+    emit('apiSourceApplied', selectedApiProvider.value)
+  } catch (error) {
+    apiFeedback.value = error instanceof Error
+      ? error.message
+      : t('app.authenticationRequired')
+    apiFeedbackType.value = 'error'
+  } finally {
+    isApiApplying.value = false
+  }
+}
+
+async function handleLaravelSignOut(): Promise<void> {
+  if (isApiApplying.value) {
+    return
+  }
+
+  isApiApplying.value = true
+
+  try {
+    await logoutFromLaravel()
+  } catch {
+    // The local token is cleared even if the remote logout fails.
+  } finally {
+    apiFeedback.value = t('settings.laravelSignedOut')
+    apiFeedbackType.value = 'success'
+    laravelPassword.value = ''
+    isApiApplying.value = false
+    emit('laravelSignedOut')
   }
 }
 
@@ -209,12 +355,25 @@ watch(
   () => props.open,
   (open) => {
     if (open) {
-      void loadSettings()
+      selectedApiProvider.value = apiProvider.value
+      laravelUrl.value = laravelApiUrl.value
+      laravelEmail.value = laravelAuthentication.value?.user.email ?? ''
+      laravelPassword.value = ''
+      apiFeedback.value = ''
+      apiFeedbackType.value = ''
+      activeSection.value = 'api'
+      void nextTick(() => dialog.value?.focus())
     } else {
       loadSequence += 1
     }
   }
 )
+
+watch(activeSection, (section) => {
+  if (props.open && section === 'database' && !loadedSettings.value) {
+    void loadSettings()
+  }
+})
 </script>
 
 <template>
@@ -260,6 +419,25 @@ watch(
               class="settings-navigation__item"
               :class="{
                 'settings-navigation__item--active':
+                  activeSection === 'api'
+              }"
+              type="button"
+              @click="activeSection = 'api'"
+            >
+              <span aria-hidden="true">⇄</span>
+              <span class="settings-navigation__label">
+                <span>{{ t('settings.connectionMode') }}</span>
+                <small>
+                  {{ t('settings.currentMode', {
+                    mode: activeApiProviderLabel
+                  }) }}
+                </small>
+              </span>
+            </button>
+            <button
+              class="settings-navigation__item"
+              :class="{
+                'settings-navigation__item--active':
                   activeSection === 'database'
               }"
               type="button"
@@ -294,8 +472,209 @@ watch(
             </button>
           </nav>
 
+          <section
+            v-if="activeSection === 'api'"
+            class="preference-settings"
+            aria-labelledby="api-settings-title"
+          >
+            <p class="eyebrow">CONNECTION</p>
+            <h3 id="api-settings-title">
+              {{ t('settings.connectionMode') }}
+            </h3>
+            <p class="settings-description">
+              {{ t('settings.connectionModeDescription') }}
+            </p>
+
+            <div class="preference-options">
+              <label
+                class="preference-option"
+                :class="{
+                  'preference-option--selected':
+                    selectedApiProvider === 'fastify'
+                }"
+              >
+                <input
+                  v-model="selectedApiProvider"
+                  type="radio"
+                  name="api-provider"
+                  value="fastify"
+                  @change="
+                    apiFeedback = '';
+                    apiFeedbackType = ''
+                  "
+                >
+                <span>
+                  <strong>{{ t('settings.databaseMode') }}</strong>
+                  <small>{{ t('settings.databaseModeHint') }}</small>
+                </span>
+              </label>
+
+              <label
+                class="preference-option"
+                :class="{
+                  'preference-option--selected':
+                    selectedApiProvider === 'laravel'
+                }"
+              >
+                <input
+                  v-model="selectedApiProvider"
+                  type="radio"
+                  name="api-provider"
+                  value="laravel"
+                  @change="
+                    apiFeedback = '';
+                    apiFeedbackType = ''
+                  "
+                >
+                <span>
+                  <strong>{{ t('settings.apiMode') }}</strong>
+                  <small>{{ t('settings.apiModeHint') }}</small>
+                </span>
+              </label>
+
+              <label
+                class="preference-option"
+                :class="{
+                  'preference-option--selected':
+                    selectedApiProvider === 'session'
+                }"
+              >
+                <input
+                  v-model="selectedApiProvider"
+                  type="radio"
+                  name="api-provider"
+                  value="session"
+                  @change="
+                    apiFeedback = '';
+                    apiFeedbackType = ''
+                  "
+                >
+                <span>
+                  <strong>{{ t('settings.sessionMode') }}</strong>
+                  <small>{{ t('settings.sessionModeHint') }}</small>
+                </span>
+              </label>
+            </div>
+
+            <div
+              v-if="selectedApiProvider !== 'fastify'"
+              class="settings-field settings-field--wide"
+            >
+              <label for="laravel-api-url">
+                {{ t('settings.laravelUrl') }}
+              </label>
+              <input
+                id="laravel-api-url"
+                v-model="laravelUrl"
+                type="url"
+                inputmode="url"
+                autocomplete="url"
+                placeholder="http://api.jl.test"
+                @input="
+                  apiFeedback = '';
+                  apiFeedbackType = ''
+                "
+              >
+            </div>
+
+            <div
+              v-if="
+                selectedApiProvider === 'laravel'
+                && isSelectedLaravelAuthenticated
+              "
+              class="settings-security-note"
+            >
+              <span>
+                {{ t('settings.laravelSignedInAs', {
+                  email: selectedLaravelUser?.email ?? ''
+                }) }}
+              </span>
+              <button
+                type="button"
+                :disabled="isApiApplying"
+                @click="handleLaravelSignOut"
+              >
+                {{ t('common.signOut') }}
+              </button>
+            </div>
+
+            <div
+              v-else-if="selectedApiProvider === 'laravel'"
+              class="settings-field-grid settings-field-grid--equal"
+            >
+              <div class="settings-field">
+                <label for="laravel-email">
+                  {{ t('settings.laravelEmail') }}
+                </label>
+                <input
+                  id="laravel-email"
+                  v-model="laravelEmail"
+                  type="email"
+                  autocomplete="username"
+                  @input="
+                    apiFeedback = '';
+                    apiFeedbackType = ''
+                  "
+                >
+              </div>
+              <div class="settings-field">
+                <label for="laravel-password">
+                  {{ t('settings.laravelPassword') }}
+                </label>
+                <input
+                  id="laravel-password"
+                  v-model="laravelPassword"
+                  type="password"
+                  autocomplete="current-password"
+                  @input="
+                    apiFeedback = '';
+                    apiFeedbackType = ''
+                  "
+                  @keydown.enter.prevent="handleApplyApiSource"
+                >
+              </div>
+            </div>
+
+            <p
+              v-if="selectedApiProvider === 'session'"
+              class="settings-security-note"
+            >
+              {{ t('settings.sessionNote') }}
+            </p>
+
+            <p
+              v-if="apiFeedback"
+              class="settings-feedback"
+              :class="`settings-feedback--${apiFeedbackType}`"
+              role="status"
+            >
+              {{ apiFeedback }}
+            </p>
+
+            <footer class="settings-dialog__actions">
+              <button
+                class="button--primary"
+                type="button"
+                :disabled="isApiApplying"
+                @click="handleApplyApiSource"
+              >
+                {{
+                  isApiApplying
+                    ? selectedApiProvider === 'laravel'
+                      && !isSelectedLaravelAuthenticated
+                      ? t('common.signingIn')
+                      : t('common.applying')
+                    : selectedApiProvider === 'laravel'
+                      && !isSelectedLaravelAuthenticated
+                      ? t('common.signIn')
+                      : t('common.apply')
+                }}
+              </button>
+            </footer>
+          </section>
+
           <form
-            v-if="activeSection === 'database'"
+            v-else-if="activeSection === 'database'"
             class="database-settings"
             @submit.prevent="handleApply"
           >

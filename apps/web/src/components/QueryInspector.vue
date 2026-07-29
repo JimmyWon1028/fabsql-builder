@@ -23,6 +23,10 @@ import {
 import {
   useApplicationPreferences
 } from '../preferences/use-application-preferences'
+import {
+  formatQueryExpression,
+  formatQueryFilterNode
+} from '../query-builder/format-query-expression'
 import FilterGroupEditor from './FilterGroupEditor.vue'
 
 type InspectorTab = 'fields' | 'joins' | 'filters' | 'grouping'
@@ -33,6 +37,7 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{
+  setDistinct: [distinct: boolean]
   updateField: [field: SelectedField]
   reorderField: [
     fieldId: string,
@@ -150,6 +155,12 @@ function tableForId(tableId: string): QueryTable | undefined {
 function fieldLabel(field: FieldReference): string {
   const table = tableForId(field.tableId)
   return `${table?.alias ?? '?'}.${field.columnName}`
+}
+
+function selectedFieldLabel(field: SelectedField): string {
+  return field.expression
+    ? formatQueryExpression(field.expression, props.model.tables)
+    : fieldLabel(field.field)
 }
 
 function updateSelectedField(
@@ -446,6 +457,17 @@ onBeforeUnmount(() => {
               {{ t('inspector.selectedFields') }}
             </h2>
           </div>
+          <label class="query-distinct-option">
+            <input
+              :checked="Boolean(model.distinct)"
+              type="checkbox"
+              @change="emit(
+                'setDistinct',
+                ($event.target as HTMLInputElement).checked
+              )"
+            >
+            {{ t('inspector.queryDistinct') }}
+          </label>
         </div>
 
         <div
@@ -487,7 +509,7 @@ onBeforeUnmount(() => {
                   <div
                     class="selected-field-drag-handle"
                     :title="t('inspector.dragField', {
-                      field: fieldLabel(field.field)
+                      field: selectedFieldLabel(field)
                     })"
                     @pointercancel="finishSelectedFieldPointerDrag(
                       $event,
@@ -501,15 +523,15 @@ onBeforeUnmount(() => {
                     @pointerup="finishSelectedFieldPointerDrag"
                   >
                     <span aria-hidden="true">⋮⋮</span>
-                    <code :title="fieldLabel(field.field)">
-                      {{ fieldLabel(field.field) }}
+                    <code :title="selectedFieldLabel(field)">
+                      {{ selectedFieldLabel(field) }}
                     </code>
                   </div>
                 </td>
                 <td>
                   <label>
                     <span class="visually-hidden">
-                      {{ fieldLabel(field.field) }}
+                      {{ selectedFieldLabel(field) }}
                       {{ t('inspector.function') }}
                     </span>
                     <select
@@ -533,7 +555,7 @@ onBeforeUnmount(() => {
                 <td>
                   <label>
                     <span class="visually-hidden">
-                      {{ fieldLabel(field.field) }}
+                      {{ selectedFieldLabel(field) }}
                       {{ t('inspector.alias') }}
                     </span>
                     <input
@@ -549,7 +571,7 @@ onBeforeUnmount(() => {
                 <td class="selected-fields-table__distinct">
                   <label>
                     <span class="visually-hidden">
-                      {{ fieldLabel(field.field) }}
+                      {{ selectedFieldLabel(field) }}
                       {{ t('inspector.distinct') }}
                     </span>
                     <input
@@ -677,9 +699,21 @@ onBeforeUnmount(() => {
               <option value="LEFT">LEFT</option>
               <option value="RIGHT">RIGHT</option>
             </select>
-            <code>
-              {{ fieldLabel(join.left) }} = {{ fieldLabel(join.right) }}
-            </code>
+            <div class="join-list__conditions">
+              <code>
+                {{ fieldLabel(join.left) }} = {{ fieldLabel(join.right) }}
+              </code>
+              <code
+                v-if="join.conditions
+                  && join.conditions.children.length > 0"
+                class="join-list__extra-condition"
+              >
+                AND {{ formatQueryFilterNode(
+                  join.conditions,
+                  model.tables
+                ) }}
+              </code>
+            </div>
             <button
               type="button"
               class="icon-button icon-button--danger"
@@ -774,12 +808,28 @@ onBeforeUnmount(() => {
             :key="sorting.id"
             class="option-row option-row--sort"
           >
+            <code
+              v-if="sorting.expression"
+              class="option-row__sorting-expression"
+              :title="formatQueryExpression(
+                sorting.expression,
+                model.tables
+              )"
+            >
+              {{ formatQueryExpression(
+                sorting.expression,
+                model.tables
+              ) }}
+            </code>
             <select
+              v-else
               :value="encodeField(sorting.field)"
               @change="updateSortingField(sorting.id, {
                 field: decodeField(
                   ($event.target as HTMLSelectElement).value
-                )
+                ),
+                expression: undefined,
+                outputReference: undefined
               })"
             >
               <option
@@ -790,6 +840,13 @@ onBeforeUnmount(() => {
                 {{ item.label }}
               </option>
             </select>
+            <code
+              v-if="sorting.outputReference"
+              class="option-row__output-reference"
+              :title="t('inspector.orderByOutputReference')"
+            >
+              {{ sorting.outputReference }}
+            </code>
             <select
               :value="sorting.direction"
               :aria-label="t('inspector.sortDirection')"

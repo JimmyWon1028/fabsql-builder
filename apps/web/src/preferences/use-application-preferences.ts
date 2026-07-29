@@ -4,14 +4,23 @@ import {
   getPersistentItem,
   setPersistentItem
 } from '../services/persistent-storage'
+import {
+  configureApiClient,
+  defaultLaravelApiUrl,
+  type ApiProvider,
+  resolveSessionApiUrl
+} from '../services/api-client-config'
 
 export type ApplicationLocale = 'en' | 'zh-Hant' | 'zh-Hans'
 export type ApplicationTheme = 'blue' | 'monochrome' | 'red' | 'green'
+export type { ApiProvider }
 
 interface StoredPreferences {
   version: 1
   locale: ApplicationLocale
   theme: ApplicationTheme
+  apiProvider: ApiProvider
+  laravelApiUrl: string
 }
 
 type TranslationParameters = Record<string, string | number>
@@ -28,10 +37,17 @@ const supportedThemes: ApplicationTheme[] = [
   'red',
   'green'
 ]
+const supportedApiProviders: ApiProvider[] = [
+  'fastify',
+  'laravel',
+  'session'
+]
 const fallbackPreferences: StoredPreferences = {
   version: 1,
   locale: 'zh-Hant',
-  theme: 'blue'
+  theme: 'blue',
+  apiProvider: 'fastify',
+  laravelApiUrl: defaultLaravelApiUrl
 }
 
 const english: Record<string, string> = {
@@ -42,6 +58,9 @@ const english: Record<string, string> = {
   'common.loading': 'Loading…',
   'common.optional': 'Optional',
   'common.remove': 'Remove',
+  'common.signIn': 'Sign in and apply',
+  'common.signingIn': 'Signing in…',
+  'common.signOut': 'Sign out',
   'app.subtitle': 'Visual query designer',
   'app.new': 'New',
   'app.undo': 'Undo',
@@ -53,6 +72,8 @@ const english: Record<string, string> = {
   'app.selectDatabase': 'Select database',
   'app.editDatabase': 'Current database; double-click to change',
   'app.connectionFailed': 'Unable to connect to MariaDB',
+  'app.authenticationRequired': 'Laravel sign-in required',
+  'app.sessionRequired': 'ERP sign-in required',
   'app.connecting': 'Connecting…',
   'app.environmentSettings': 'Environment Settings',
   'app.resizeSchema': 'Resize Schema Explorer',
@@ -62,16 +83,17 @@ const english: Record<string, string> = {
   'app.openInspectorDrawer': 'Open Query Inspector drawer',
   'app.openWorkspaceDrawer': 'Open Query workspace drawer',
   'app.openSchemaDrawerHint':
-    'Click to open at minimum width; drag to resize',
+    'Click to open at default width; drag right to expand',
   'app.openInspectorDrawerHint':
-    'Click to open at minimum width; drag to resize',
+    'Click to open at default width; drag left to expand',
   'app.openWorkspaceDrawerHint':
-    'Click to open at minimum height; drag to resize',
+    'Click to open at default height; drag up to expand',
   'app.resizeWidthHint': 'Drag to resize; double-click to reset',
   'app.resizeHeightHint': 'Drag to resize height; double-click to reset',
   'app.maximizeCanvas': 'Maximize Query Canvas',
   'app.restoreCanvas': 'Restore Query Canvas',
   'app.restoreCanvasEsc': 'Restore Query Canvas (Esc)',
+  'app.exportCanvasPng': 'Export Query Canvas as PNG',
   'app.zoomToolbar': 'Display zoom',
   'app.zoomOut': 'Zoom out',
   'app.zoomReset': 'Reset to 100%',
@@ -87,7 +109,10 @@ const english: Record<string, string> = {
   'app.noticeNew': 'New query created.',
   'app.noticeSaved': 'Query file downloaded: {file}.',
   'app.noticeSaveFailed': 'Unable to download the query file.',
+  'app.noticeCanvasExported': 'Query Canvas exported: {file}.',
+  'app.noticeCanvasExportFailed': 'Unable to export Query Canvas PNG.',
   'app.noticeLoaded': 'Query file loaded: {file}.',
+  'app.noticeSqlApplied': 'SQL saved to the visual query model.',
   'app.noticeLoadFailed':
     'Unable to load this file. Select a valid FabSQL query JSON file.',
   'app.noticeStateCleared': 'Local workspace state cleared.',
@@ -129,6 +154,8 @@ const english: Record<string, string> = {
   'canvas.emptyTitle': 'Drag a table here',
   'canvas.emptyHint':
     'You can also use the ＋ button beside a Schema Explorer table.',
+  'canvas.panHint':
+    'Drag a blank area with the left mouse button to pan the whole diagram',
   'canvas.moveTable': 'Move {table}',
   'canvas.moveHint':
     'Hold the left mouse button to drag; arrow keys also move it',
@@ -142,6 +169,11 @@ const english: Record<string, string> = {
   'canvas.dropTable': 'Release to add table',
   'canvas.dropJoin':
     'Drag to another table field and release to create a JOIN',
+  'canvas.subquery': 'Subquery',
+  'canvas.openSubquery': 'Edit subquery {table}',
+  'canvas.mainQuery': 'Main query',
+  'canvas.queryBreadcrumb': 'Query level',
+  'canvas.setOperationNavigation': 'UNION query sections',
   'inspector.title': 'Query Inspector',
   'inspector.settings': 'Query settings',
   'inspector.fields': 'Fields',
@@ -153,6 +185,7 @@ const english: Record<string, string> = {
   'inspector.function': 'Function',
   'inspector.alias': 'Alias',
   'inspector.distinct': 'Distinct',
+  'inspector.queryDistinct': 'SELECT DISTINCT',
   'inspector.dragField': 'Drag {field} to reorder',
   'inspector.manual': 'MANUAL',
   'inspector.joinHelp':
@@ -168,6 +201,7 @@ const english: Record<string, string> = {
   'inspector.queryOptions': 'Query Options',
   'inspector.removeGroupBy': 'Remove GROUP BY',
   'inspector.sortDirection': 'Sort direction',
+  'inspector.orderByOutputReference': 'ORDER BY output name',
   'inspector.removeOrderBy': 'Remove ORDER BY',
   'inspector.pagination': 'Pagination',
   'filters.title': 'Filters',
@@ -194,9 +228,51 @@ const english: Record<string, string> = {
   'workspace.incomplete': 'Incomplete',
   'workspace.run': 'Run',
   'workspace.running': 'Running…',
+  'workspace.editSql': 'Edit',
+  'workspace.saveSql': 'Save',
+  'workspace.savingSql': 'Saving…',
+  'workspace.cancelSql': 'Cancel',
+  'workspace.sqlEditing': 'Editing',
+  'workspace.sqlEditingHint':
+    'Save SQL before continuing to edit the visual query model.',
+  'workspace.sqlEditorLabel': 'Editable SQL',
+  'workspace.sqlImport.syntax': 'SQL syntax error.',
+  'workspace.sqlImport.single-statement':
+    'Enter exactly one SELECT statement.',
+  'workspace.sqlImport.select-only':
+    'Only SELECT statements can be saved.',
+  'workspace.sqlImport.unsupported-query':
+    'This SELECT uses syntax that the visual model does not support.',
+  'workspace.sqlImport.table-required':
+    'The SELECT statement must include a FROM table.',
+  'workspace.sqlImport.unsupported-table':
+    'Subqueries and database-qualified tables in FROM are not supported.',
+  'workspace.sqlImport.unsupported-select-expression':
+    'A selected expression cannot be represented by the visual model.',
+  'workspace.sqlImport.column-reference':
+    'A column does not reference a known table or alias.',
+  'workspace.sqlImport.unsupported-join':
+    'Only JOIN, INNER JOIN, LEFT JOIN, and RIGHT JOIN are supported.',
+  'workspace.sqlImport.unsupported-join-condition':
+    'JOIN ON must compare two table columns with =.',
+  'workspace.sqlImport.unsupported-filter':
+    'A WHERE condition cannot be represented by the visual model.',
+  'workspace.sqlImport.parameter-missing':
+    'An added ? has no stored value; use a literal value instead.',
+  'workspace.sqlImport.unsupported-grouping':
+    'A GROUP BY expression cannot be represented by the visual model.',
+  'workspace.sqlImport.unsupported-sorting':
+    'An ORDER BY expression cannot be represented by the visual model.',
+  'workspace.sqlImport.unsupported-pagination':
+    'LIMIT and OFFSET must be non-negative integers.',
+  'workspace.sqlImport.invalid-model':
+    'The SQL creates an incomplete or invalid visual query model.',
   'workspace.copy': 'Copy SQL',
   'workspace.copied': 'Copied',
   'workspace.parameters': 'Parameters ({count})',
+  'workspace.namedParameters': 'Custom parameters ({count})',
+  'workspace.namedParameterHint':
+    'Values are saved automatically. Empty inputs run as empty strings.',
   'workspace.executing': 'Executing SQL…',
   'workspace.executionFailed': 'Query execution failed.',
   'workspace.result': 'Result',
@@ -209,9 +285,41 @@ const english: Record<string, string> = {
   'settings.environment': 'ENVIRONMENT',
   'settings.title': 'Environment Settings',
   'settings.items': 'Environment settings',
+  'settings.connectionMode': 'Connection & Authentication',
+  'settings.currentMode': 'Current: {mode}',
+  'settings.api': 'API Source',
   'settings.database': 'Database Connection',
   'settings.language': 'Language',
   'settings.theme': 'Theme',
+  'settings.connectionModeDescription':
+    'Select exactly one way for FabSQL Builder to access data.',
+  'settings.databaseMode': 'Database Connection',
+  'settings.databaseModeHint':
+    'Use the built-in Fastify API and its MariaDB connection.',
+  'settings.apiMode': 'API Source',
+  'settings.apiModeHint':
+    'Use an external Laravel API with email and password JWT sign-in.',
+  'settings.sessionMode': 'Session',
+  'settings.sessionModeHint':
+    'Use the authenticated ERP session already available in the browser.',
+  'settings.sessionNote':
+    'FabSQL does not sign in to ERP. Sign in first, then enter the FabSQL route prefix, for example http://api.jl.test/fabsql.',
+  'settings.apiDescription':
+    'Choose one API source. Only the selected API receives requests.',
+  'settings.fastify': 'Fastify',
+  'settings.fastifyHint': 'Built-in local API and editable connection',
+  'settings.laravel': 'Laravel',
+  'settings.laravelHint': 'External API using the Laravel jl connection',
+  'settings.laravelUrl': 'Laravel URL',
+  'settings.apiApplied': 'Connection mode applied: {provider}.',
+  'settings.apiInvalidUrl': 'Enter a valid HTTP or HTTPS URL.',
+  'settings.laravelEmail': 'Laravel account email',
+  'settings.laravelPassword': 'Laravel account password',
+  'settings.laravelCredentialsRequired':
+    'Enter your Laravel email and password.',
+  'settings.laravelSignedIn': 'Signed in as {email}.',
+  'settings.laravelSignedInAs': 'Signed in as {email}',
+  'settings.laravelSignedOut': 'Signed out of Laravel.',
   'settings.databaseDescription':
     'Configure the MariaDB connection used by the FabSQL Builder API.',
   'settings.passwordConfigured': 'Password configured',
@@ -288,6 +396,9 @@ const traditionalChinese: Record<string, string> = {
   'common.loading': '載入中…',
   'common.optional': '選填',
   'common.remove': '移除',
+  'common.signIn': '登入並套用',
+  'common.signingIn': '登入中…',
+  'common.signOut': '登出',
   'app.subtitle': '視覺化查詢設計工具',
   'app.new': '新增',
   'app.undo': '復原',
@@ -299,6 +410,8 @@ const traditionalChinese: Record<string, string> = {
   'app.selectDatabase': '選擇資料庫',
   'app.editDatabase': '目前資料庫，雙擊更改',
   'app.connectionFailed': 'MariaDB 無法連線',
+  'app.authenticationRequired': '需要登入 Laravel',
+  'app.sessionRequired': '需要先登入 ERP',
   'app.connecting': '正在連線…',
   'app.environmentSettings': '環境設定',
   'app.resizeSchema': '調整 Schema Explorer 寬度',
@@ -308,16 +421,17 @@ const traditionalChinese: Record<string, string> = {
   'app.openInspectorDrawer': '開啟 Query Inspector 抽屜',
   'app.openWorkspaceDrawer': '開啟 Query workspace 抽屜',
   'app.openSchemaDrawerHint':
-    '單擊以最小寬度開啟；拖曳可調整大小',
+    '單擊以預設寬度開啟；向右拖曳可展開',
   'app.openInspectorDrawerHint':
-    '單擊以最小寬度開啟；拖曳可調整大小',
+    '單擊以預設寬度開啟；向左拖曳可展開',
   'app.openWorkspaceDrawerHint':
-    '單擊以最小高度開啟；拖曳可調整大小',
+    '單擊以預設高度開啟；向上拖曳可展開',
   'app.resizeWidthHint': '拖曳調整寬度，雙擊恢復預設',
   'app.resizeHeightHint': '拖曳調整高度，雙擊恢復預設',
   'app.maximizeCanvas': '最大化 Query Canvas',
   'app.restoreCanvas': '還原 Query Canvas',
   'app.restoreCanvasEsc': '還原 Query Canvas（Esc）',
+  'app.exportCanvasPng': '將關聯圖匯出為 PNG',
   'app.zoomToolbar': '畫面縮放',
   'app.zoomOut': '縮小畫面',
   'app.zoomReset': '恢復 100% 顯示比例',
@@ -332,7 +446,10 @@ const traditionalChinese: Record<string, string> = {
   'app.noticeNew': '已建立新查詢。',
   'app.noticeSaved': '已下載查詢檔案：{file}。',
   'app.noticeSaveFailed': '無法下載查詢檔案。',
+  'app.noticeCanvasExported': '已匯出關聯圖：{file}。',
+  'app.noticeCanvasExportFailed': '無法匯出關聯圖 PNG。',
   'app.noticeLoaded': '已載入查詢檔案：{file}。',
+  'app.noticeSqlApplied': 'SQL 已儲存並更新關聯圖。',
   'app.noticeLoadFailed':
     '無法載入檔案，請選擇有效的 FabSQL 查詢 JSON 檔。',
   'app.noticeStateCleared': '已清除本機操作狀態。',
@@ -369,6 +486,7 @@ const traditionalChinese: Record<string, string> = {
   'canvas.editJoinType': '{type}；雙擊可變更 JOIN 類型',
   'canvas.emptyTitle': '拖曳資料表到這裡',
   'canvas.emptyHint': '也可以使用 Schema Explorer 每列右側的 ＋ 按鈕。',
+  'canvas.panHint': '在空白處按住滑鼠左鍵拖曳，可平移整張關聯圖',
   'canvas.moveTable': '移動 {table}',
   'canvas.moveHint': '按住滑鼠左鍵拖曳；方向鍵也可以移動',
   'canvas.removeTable': '移除 {table}',
@@ -379,11 +497,17 @@ const traditionalChinese: Record<string, string> = {
   'canvas.unselectField': '取消選取 {field}',
   'canvas.dropTable': '放開以加入資料表',
   'canvas.dropJoin': '拖到另一個資料表欄位，放開建立 JOIN',
+  'canvas.subquery': '子查詢',
+  'canvas.openSubquery': '編輯子查詢 {table}',
+  'canvas.mainQuery': '主查詢',
+  'canvas.queryBreadcrumb': '查詢層級',
+  'canvas.setOperationNavigation': 'UNION 查詢分段',
   'inspector.settings': '查詢設定',
   'inspector.fields': '欄位',
   'inspector.filters': '篩選',
   'inspector.more': '更多',
   'inspector.selectedFields': '選取欄位',
+  'inspector.queryDistinct': 'SELECT DISTINCT',
   'inspector.noSelectedFields': '尚未選取輸出欄位。',
   'inspector.field': '欄位',
   'inspector.function': '函式',
@@ -401,6 +525,7 @@ const traditionalChinese: Record<string, string> = {
   'inspector.queryOptions': '查詢選項',
   'inspector.removeGroupBy': '移除 GROUP BY',
   'inspector.sortDirection': '排序方向',
+  'inspector.orderByOutputReference': 'ORDER BY 輸出名稱',
   'inspector.removeOrderBy': '移除 ORDER BY',
   'inspector.pagination': '分頁',
   'filters.nested': '巢狀篩選群組',
@@ -424,9 +549,51 @@ const traditionalChinese: Record<string, string> = {
   'workspace.invalid': '無法產生',
   'workspace.incomplete': '尚未完成',
   'workspace.running': '執行中…',
+  'workspace.editSql': '編輯',
+  'workspace.saveSql': '儲存',
+  'workspace.savingSql': '儲存中…',
+  'workspace.cancelSql': '取消',
+  'workspace.sqlEditing': '編輯中',
+  'workspace.sqlEditingHint':
+    '儲存 SQL 後才能繼續操作關聯圖與查詢設定。',
+  'workspace.sqlEditorLabel': '可編輯的 SQL',
+  'workspace.sqlImport.syntax': 'SQL 語法錯誤。',
+  'workspace.sqlImport.single-statement':
+    '只能輸入一個 SELECT statement。',
+  'workspace.sqlImport.select-only':
+    '只能儲存 SELECT statement。',
+  'workspace.sqlImport.unsupported-query':
+    '這段 SELECT 使用了關聯圖目前無法表達的語法。',
+  'workspace.sqlImport.table-required':
+    'SELECT 必須包含 FROM 資料表。',
+  'workspace.sqlImport.unsupported-table':
+    'FROM 暫不支援子查詢或帶資料庫名稱的資料表。',
+  'workspace.sqlImport.unsupported-select-expression':
+    '輸出 expression 無法轉成關聯圖欄位。',
+  'workspace.sqlImport.column-reference':
+    '欄位沒有參照已知的資料表或 alias。',
+  'workspace.sqlImport.unsupported-join':
+    '只支援 JOIN、INNER JOIN、LEFT JOIN 與 RIGHT JOIN。',
+  'workspace.sqlImport.unsupported-join-condition':
+    'JOIN ON 必須使用 = 比較兩個資料表欄位。',
+  'workspace.sqlImport.unsupported-filter':
+    'WHERE 條件無法轉成目前的視覺化篩選條件。',
+  'workspace.sqlImport.parameter-missing':
+    '新增的 ? 沒有既有參數值，請改用 literal value。',
+  'workspace.sqlImport.unsupported-grouping':
+    'GROUP BY expression 無法轉成關聯圖欄位。',
+  'workspace.sqlImport.unsupported-sorting':
+    'ORDER BY expression 無法轉成關聯圖欄位。',
+  'workspace.sqlImport.unsupported-pagination':
+    'LIMIT 與 OFFSET 必須是非負整數。',
+  'workspace.sqlImport.invalid-model':
+    'SQL 產生的視覺化 Query Model 不完整或無效。',
   'workspace.copy': '複製 SQL',
   'workspace.copied': '已複製',
   'workspace.parameters': '參數（{count}）',
+  'workspace.namedParameters': '自訂參數（{count}）',
+  'workspace.namedParameterHint':
+    '輸入值會自動儲存；留空時會以空字串執行。',
   'workspace.executing': '正在執行 SQL…',
   'workspace.executionFailed': '查詢執行失敗。',
   'workspace.result': '結果',
@@ -439,9 +606,41 @@ const traditionalChinese: Record<string, string> = {
   'settings.environment': '環境',
   'settings.title': '環境設定',
   'settings.items': '環境設定項目',
+  'settings.connectionMode': '連線與驗證',
+  'settings.currentMode': '目前：{mode}',
+  'settings.api': 'API 來源',
   'settings.database': '資料庫連線',
   'settings.language': '語言',
   'settings.theme': '主題',
+  'settings.connectionModeDescription':
+    '請勾選一種 FabSQL Builder 存取資料的方式。',
+  'settings.databaseMode': '資料庫連線',
+  'settings.databaseModeHint':
+    '使用內建 Fastify API 與其 MariaDB 連線設定。',
+  'settings.apiMode': 'API 來源',
+  'settings.apiModeHint':
+    '使用外部 Laravel API，透過 Email 與密碼取得 JWT。',
+  'settings.sessionMode': 'Session',
+  'settings.sessionModeHint':
+    '沿用瀏覽器內已登入的 ERP session。',
+  'settings.sessionNote':
+    'FabSQL 不提供 ERP 登入；請先登入 ERP，再輸入 FabSQL 路由前綴，例如 http://api.jl.test/fabsql。',
+  'settings.apiDescription':
+    '選擇一個 API 來源；只有選中的 API 會收到請求。',
+  'settings.fastify': 'Fastify',
+  'settings.fastifyHint': '內建本機 API，可編輯資料庫連線',
+  'settings.laravel': 'Laravel',
+  'settings.laravelHint': '外部 API，使用 Laravel 的 jl connection',
+  'settings.laravelUrl': 'Laravel 網址',
+  'settings.apiApplied': '已套用連線方式：{provider}。',
+  'settings.apiInvalidUrl': '請輸入有效的 HTTP 或 HTTPS 網址。',
+  'settings.laravelEmail': 'Laravel 帳號 Email',
+  'settings.laravelPassword': 'Laravel 帳號密碼',
+  'settings.laravelCredentialsRequired':
+    '請輸入 Laravel Email 與密碼。',
+  'settings.laravelSignedIn': '已使用 {email} 登入。',
+  'settings.laravelSignedInAs': '目前登入：{email}',
+  'settings.laravelSignedOut': '已登出 Laravel。',
   'settings.databaseDescription':
     '設定 FabSQL Builder API 使用的 MariaDB 連線。',
   'settings.passwordConfigured': '已設定密碼',
@@ -651,6 +850,9 @@ const simplifiedChinese: Record<string, string> = {
   'common.loading': '加载中…',
   'common.optional': '可选',
   'common.remove': '删除',
+  'common.signIn': '登录并应用',
+  'common.signingIn': '登录中…',
+  'common.signOut': '退出登录',
   'app.subtitle': '可视化查询设计工具',
   'app.new': '新建',
   'app.undo': '撤销',
@@ -662,17 +864,20 @@ const simplifiedChinese: Record<string, string> = {
   'app.selectDatabase': '选择数据库',
   'app.editDatabase': '当前数据库，双击更改',
   'app.connectionFailed': 'MariaDB 无法连接',
+  'app.authenticationRequired': '需要登录 Laravel',
+  'app.sessionRequired': '需要先登录 ERP',
   'app.connecting': '正在连接…',
   'app.environmentSettings': '环境设置',
   'app.openSchemaDrawer': '打开 Schema Explorer 抽屉',
   'app.openInspectorDrawer': '打开 Query Inspector 抽屉',
   'app.openWorkspaceDrawer': '打开 Query workspace 抽屉',
   'app.openSchemaDrawerHint':
-    '单击以最小宽度打开；拖动可调整大小',
+    '单击以默认宽度打开；向右拖动可展开',
   'app.openInspectorDrawerHint':
-    '单击以最小宽度打开；拖动可调整大小',
+    '单击以默认宽度打开；向左拖动可展开',
   'app.openWorkspaceDrawerHint':
-    '单击以最小高度打开；拖动可调整大小',
+    '单击以默认高度打开；向上拖动可展开',
+  'app.exportCanvasPng': '将关系图导出为 PNG',
   'app.confirmNew': '清除当前 Query Model 并创建新查询？',
   'app.confirmClear': '清除已保存的操作状态，并重置当前 Query Model？',
   'app.confirmDatabase':
@@ -683,7 +888,10 @@ const simplifiedChinese: Record<string, string> = {
   'app.noticeNew': '已创建新查询。',
   'app.noticeSaved': '已下载查询文件：{file}。',
   'app.noticeSaveFailed': '无法下载查询文件。',
+  'app.noticeCanvasExported': '已导出关系图：{file}。',
+  'app.noticeCanvasExportFailed': '无法导出关系图 PNG。',
   'app.noticeLoaded': '已加载查询文件：{file}。',
+  'app.noticeSqlApplied': 'SQL 已保存并更新关系图。',
   'app.noticeLoadFailed':
     '无法加载文件，请选择有效的 FabSQL 查询 JSON 文件。',
   'app.noticeStateCleared': '已清除本机操作状态。',
@@ -718,6 +926,7 @@ const simplifiedChinese: Record<string, string> = {
   'canvas.editJoinType': '{type}；双击可更改 JOIN 类型',
   'canvas.emptyTitle': '拖动数据表到这里',
   'canvas.emptyHint': '也可以使用 Schema Explorer 每行右侧的 ＋ 按钮。',
+  'canvas.panHint': '在空白处按住鼠标左键拖动，可平移整张关系图',
   'canvas.moveHint': '按住鼠标左键拖动；方向键也可以移动',
   'canvas.removeTable': '删除 {table}',
   'canvas.removeTableHint': '移除数据表及相关设置',
@@ -727,11 +936,17 @@ const simplifiedChinese: Record<string, string> = {
   'canvas.unselectField': '取消选择 {field}',
   'canvas.dropTable': '松开以加入数据表',
   'canvas.dropJoin': '拖到另一个数据表字段，松开建立 JOIN',
+  'canvas.subquery': '子查询',
+  'canvas.openSubquery': '编辑子查询 {table}',
+  'canvas.mainQuery': '主查询',
+  'canvas.queryBreadcrumb': '查询层级',
+  'canvas.setOperationNavigation': 'UNION 查询分段',
   'inspector.settings': '查询设置',
   'inspector.fields': '字段',
   'inspector.filters': '筛选',
   'inspector.more': '更多',
   'inspector.selectedFields': '选择字段',
+  'inspector.queryDistinct': 'SELECT DISTINCT',
   'inspector.noSelectedFields': '尚未选择输出字段。',
   'inspector.field': '字段',
   'inspector.function': '函数',
@@ -747,6 +962,7 @@ const simplifiedChinese: Record<string, string> = {
   'inspector.queryOptions': '查询选项',
   'inspector.removeGroupBy': '删除 GROUP BY',
   'inspector.removeOrderBy': '删除 ORDER BY',
+  'inspector.orderByOutputReference': 'ORDER BY 输出名称',
   'inspector.pagination': '分页',
   'filters.nested': '嵌套筛选组',
   'filters.conjunction': '条件组合方式',
@@ -763,8 +979,50 @@ const simplifiedChinese: Record<string, string> = {
   'workspace.invalid': '无法生成',
   'workspace.incomplete': '尚未完成',
   'workspace.running': '执行中…',
+  'workspace.editSql': '编辑',
+  'workspace.saveSql': '保存',
+  'workspace.savingSql': '保存中…',
+  'workspace.cancelSql': '取消',
+  'workspace.sqlEditing': '编辑中',
+  'workspace.sqlEditingHint':
+    '保存 SQL 后才能继续操作关系图和查询设置。',
+  'workspace.sqlEditorLabel': '可编辑的 SQL',
+  'workspace.sqlImport.syntax': 'SQL 语法错误。',
+  'workspace.sqlImport.single-statement':
+    '只能输入一个 SELECT statement。',
+  'workspace.sqlImport.select-only':
+    '只能保存 SELECT statement。',
+  'workspace.sqlImport.unsupported-query':
+    '这段 SELECT 使用了关系图目前无法表达的语法。',
+  'workspace.sqlImport.table-required':
+    'SELECT 必须包含 FROM 数据表。',
+  'workspace.sqlImport.unsupported-table':
+    'FROM 暂不支持子查询或带数据库名称的数据表。',
+  'workspace.sqlImport.unsupported-select-expression':
+    '输出 expression 无法转换成关系图字段。',
+  'workspace.sqlImport.column-reference':
+    '字段没有引用已知的数据表或 alias。',
+  'workspace.sqlImport.unsupported-join':
+    '只支持 JOIN、INNER JOIN、LEFT JOIN 和 RIGHT JOIN。',
+  'workspace.sqlImport.unsupported-join-condition':
+    'JOIN ON 必须使用 = 比较两个数据表字段。',
+  'workspace.sqlImport.unsupported-filter':
+    'WHERE 条件无法转换成目前的可视化筛选条件。',
+  'workspace.sqlImport.parameter-missing':
+    '新增的 ? 没有现有参数值，请改用 literal value。',
+  'workspace.sqlImport.unsupported-grouping':
+    'GROUP BY expression 无法转换成关系图字段。',
+  'workspace.sqlImport.unsupported-sorting':
+    'ORDER BY expression 无法转换成关系图字段。',
+  'workspace.sqlImport.unsupported-pagination':
+    'LIMIT 和 OFFSET 必须是非负整数。',
+  'workspace.sqlImport.invalid-model':
+    'SQL 产生的可视化 Query Model 不完整或无效。',
   'workspace.copy': '复制 SQL',
   'workspace.copied': '已复制',
+  'workspace.namedParameters': '自定义参数（{count}）',
+  'workspace.namedParameterHint':
+    '输入值会自动保存；留空时会以空字符串执行。',
   'workspace.executing': '正在执行 SQL…',
   'workspace.executionFailed': '查询执行失败。',
   'workspace.result': '结果',
@@ -777,9 +1035,41 @@ const simplifiedChinese: Record<string, string> = {
   'settings.environment': '环境',
   'settings.title': '环境设置',
   'settings.items': '环境设置项目',
+  'settings.connectionMode': '连接与验证',
+  'settings.currentMode': '当前：{mode}',
+  'settings.api': 'API 来源',
   'settings.database': '数据库连接',
   'settings.language': '语言',
   'settings.theme': '主题',
+  'settings.connectionModeDescription':
+    '请选择一种 FabSQL Builder 访问数据的方式。',
+  'settings.databaseMode': '数据库连接',
+  'settings.databaseModeHint':
+    '使用内置 Fastify API 及其 MariaDB 连接设置。',
+  'settings.apiMode': 'API 来源',
+  'settings.apiModeHint':
+    '使用外部 Laravel API，通过 Email 和密码获取 JWT。',
+  'settings.sessionMode': 'Session',
+  'settings.sessionModeHint':
+    '沿用浏览器内已登录的 ERP session。',
+  'settings.sessionNote':
+    'FabSQL 不提供 ERP 登录；请先登录 ERP，再输入 FabSQL 路由前缀，例如 http://api.jl.test/fabsql。',
+  'settings.apiDescription':
+    '选择一个 API 来源；只有选中的 API 会收到请求。',
+  'settings.fastify': 'Fastify',
+  'settings.fastifyHint': '内置本机 API，可编辑数据库连接',
+  'settings.laravel': 'Laravel',
+  'settings.laravelHint': '外部 API，使用 Laravel 的 jl connection',
+  'settings.laravelUrl': 'Laravel 网址',
+  'settings.apiApplied': '已应用连接方式：{provider}。',
+  'settings.apiInvalidUrl': '请输入有效的 HTTP 或 HTTPS 网址。',
+  'settings.laravelEmail': 'Laravel 账号 Email',
+  'settings.laravelPassword': 'Laravel 账号密码',
+  'settings.laravelCredentialsRequired':
+    '请输入 Laravel Email 与密码。',
+  'settings.laravelSignedIn': '已使用 {email} 登录。',
+  'settings.laravelSignedInAs': '当前登录：{email}',
+  'settings.laravelSignedOut': '已退出 Laravel。',
   'settings.databaseDescription':
     '设置 FabSQL Builder API 使用的 MariaDB 连接。',
   'settings.passwordConfigured': '已设置密码',
@@ -861,7 +1151,16 @@ function readStoredPreferences(
         : fallbackPreferences.locale,
       theme: supportedThemes.includes(stored.theme as ApplicationTheme)
         ? stored.theme as ApplicationTheme
-        : fallbackPreferences.theme
+        : fallbackPreferences.theme,
+      apiProvider: supportedApiProviders.includes(
+        stored.apiProvider as ApiProvider
+      )
+        ? stored.apiProvider as ApiProvider
+        : fallbackPreferences.apiProvider,
+      laravelApiUrl: typeof stored.laravelApiUrl === 'string'
+        && stored.laravelApiUrl.trim()
+        ? stored.laravelApiUrl.trim().replace(/\/+$/, '')
+        : fallbackPreferences.laravelApiUrl
     }
   } catch {
     return fallbackPreferences
@@ -870,6 +1169,8 @@ function readStoredPreferences(
 
 const locale = ref<ApplicationLocale>(fallbackPreferences.locale)
 const theme = ref<ApplicationTheme>(fallbackPreferences.theme)
+const apiProvider = ref<ApiProvider>(fallbackPreferences.apiProvider)
+const laravelApiUrl = ref(fallbackPreferences.laravelApiUrl)
 let preferencesInitialized = false
 
 function translate(
@@ -892,6 +1193,10 @@ async function applyPreferences(): Promise<void> {
 
   document.documentElement.lang = locale.value
   document.documentElement.dataset.theme = theme.value
+  configureApiClient({
+    provider: apiProvider.value,
+    laravelUrl: laravelApiUrl.value
+  })
 
   try {
     await setPersistentItem(
@@ -899,7 +1204,9 @@ async function applyPreferences(): Promise<void> {
       JSON.stringify({
         version: 1,
         locale: locale.value,
-        theme: theme.value
+        theme: theme.value,
+        apiProvider: apiProvider.value,
+        laravelApiUrl: laravelApiUrl.value
       } satisfies StoredPreferences)
     )
   } catch {
@@ -907,7 +1214,7 @@ async function applyPreferences(): Promise<void> {
   }
 }
 
-watch([locale, theme], () => {
+watch([locale, theme, apiProvider, laravelApiUrl], () => {
   if (preferencesInitialized) {
     void applyPreferences()
   }
@@ -926,6 +1233,16 @@ export async function initializeApplicationPreferences(): Promise<void> {
 
   locale.value = storedPreferences.locale
   theme.value = storedPreferences.theme
+  const sessionApiUrl = typeof window === 'undefined'
+    ? null
+    : resolveSessionApiUrl(
+        window.location.search,
+        window.location.protocol
+      )
+  apiProvider.value = sessionApiUrl
+    ? 'session'
+    : storedPreferences.apiProvider
+  laravelApiUrl.value = sessionApiUrl ?? storedPreferences.laravelApiUrl
   preferencesInitialized = true
   await applyPreferences()
 }
@@ -934,11 +1251,24 @@ export function useApplicationPreferences() {
   return {
     locale,
     theme,
+    apiProvider,
+    laravelApiUrl,
     setLocale(value: ApplicationLocale): void {
       locale.value = value
     },
     setTheme(value: ApplicationTheme): void {
       theme.value = value
+    },
+    setApiSource(provider: ApiProvider, url: string): void {
+      const normalizedUrl = url.trim().replace(/\/+$/, '')
+        || defaultLaravelApiUrl
+
+      configureApiClient({
+        provider,
+        laravelUrl: normalizedUrl
+      })
+      apiProvider.value = provider
+      laravelApiUrl.value = normalizedUrl
     },
     t: translate
   }

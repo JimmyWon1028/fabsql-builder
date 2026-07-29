@@ -1,6 +1,8 @@
 import type {
   FieldReference,
   FilterNode,
+  QueryExpression,
+  QueryFilterValue,
   QueryModel
 } from './query-model.js'
 
@@ -30,6 +32,112 @@ function collectFilterIds(node: FilterNode, ids: string[]): void {
   }
 }
 
+function validateExpression(
+  expression: QueryExpression,
+  tableIds: Set<string>,
+  issues: QueryValidationIssue[],
+  targetId: string
+): void {
+  switch (expression.kind) {
+    case 'field':
+      if (!fieldExists(expression.field, tableIds)) {
+        issues.push({
+          severity: 'error',
+          code: 'expression-field-invalid',
+          message: 'Expression 參照了不存在的 table 或欄位。',
+          targetId
+        })
+      }
+      return
+    case 'function':
+      if (!/^[A-Za-z_][A-Za-z0-9_$]*$/.test(expression.name)) {
+        issues.push({
+          severity: 'error',
+          code: 'expression-function-invalid',
+          message: 'Expression 函式名稱格式無效。',
+          targetId
+        })
+      }
+      expression.arguments.forEach((argument) => {
+        validateExpression(argument, tableIds, issues, targetId)
+      })
+      return
+    case 'binary':
+      validateExpression(expression.left, tableIds, issues, targetId)
+      validateExpression(expression.right, tableIds, issues, targetId)
+      return
+    case 'unary':
+      validateExpression(expression.operand, tableIds, issues, targetId)
+      return
+    case 'aggregate':
+      if (!/^[A-Za-z_][A-Za-z0-9_$]*$/.test(expression.name)) {
+        issues.push({
+          severity: 'error',
+          code: 'expression-function-invalid',
+          message: 'Aggregate expression 名稱格式無效。',
+          targetId
+        })
+      }
+      validateExpression(expression.argument, tableIds, issues, targetId)
+      expression.ordering?.forEach((ordering) => {
+        validateExpression(ordering.expression, tableIds, issues, targetId)
+      })
+      return
+    case 'subquery':
+      validateQueryModel(expression.query).forEach((issue) => {
+        issues.push({
+          ...issue,
+          message: `Scalar 子查詢：${issue.message}`,
+          targetId: issue.targetId ?? targetId
+        })
+      })
+      return
+    case 'case':
+      if (expression.branches.length === 0) {
+        issues.push({
+          severity: 'error',
+          code: 'expression-case-empty',
+          message: 'CASE expression 至少需要一個 WHEN 分支。',
+          targetId
+        })
+      }
+      if (expression.operand) {
+        validateExpression(expression.operand, tableIds, issues, targetId)
+      }
+      expression.branches.forEach((branch) => {
+        validateExpression(branch.when, tableIds, issues, targetId)
+        validateExpression(branch.then, tableIds, issues, targetId)
+      })
+      if (expression.elseExpression) {
+        validateExpression(
+          expression.elseExpression,
+          tableIds,
+          issues,
+          targetId
+        )
+      }
+      return
+    case 'parameter':
+      if (!/^[A-Za-z_][A-Za-z0-9_$]*$/.test(expression.name)) {
+        issues.push({
+          severity: 'error',
+          code: 'named-parameter-invalid',
+          message: '具名參數名稱格式無效。',
+          targetId
+        })
+      }
+      return
+    case 'literal':
+      return
+  }
+}
+
+function isFilterValueMissing(
+  value: QueryFilterValue | undefined
+): boolean {
+  return value === undefined || value === ''
+}
+
 function validateStableIds(
   model: QueryModel,
   issues: QueryValidationIssue[]
@@ -39,10 +147,16 @@ function validateStableIds(
     ...model.selectedFields.map((item) => item.id),
     ...model.joins.map((item) => item.id),
     ...model.grouping.map((item) => item.id),
-    ...model.sorting.map((item) => item.id)
+    ...model.sorting.map((item) => item.id),
+    ...(model.setOperations ?? []).map((item) => item.id)
   ]
 
   collectFilterIds(model.filters, ids)
+  model.joins.forEach((join) => {
+    if (join.conditions) {
+      collectFilterIds(join.conditions, ids)
+    }
+  })
   const seenIds = new Set<string>()
 
   ids.forEach((id) => {
@@ -73,7 +187,9 @@ function validateFilterNode(
     return
   }
 
-  if (!fieldExists(node.field, tableIds)) {
+  if (node.expression) {
+    validateExpression(node.expression, tableIds, issues, node.id)
+  } else if (!fieldExists(node.field, tableIds)) {
     issues.push({
       severity: 'error',
       code: 'filter-field-missing',
@@ -82,12 +198,22 @@ function validateFilterNode(
     })
   }
 
+  if (node.rightExpression) {
+    validateExpression(
+      node.rightExpression,
+      tableIds,
+      issues,
+      node.id
+    )
+  }
+
   if (node.operator === 'IS NULL' || node.operator === 'IS NOT NULL') {
     return
   }
 
   if (
     (node.operator === 'IN' || node.operator === 'NOT IN')
+    && !node.rightExpression
     && (!Array.isArray(node.value) || node.value.length === 0)
   ) {
     issues.push({
@@ -99,7 +225,12 @@ function validateFilterNode(
     return
   }
 
-  if (node.value === undefined || node.value === '') {
+  if (
+    !node.rightExpression
+    &&
+    !Array.isArray(node.value)
+    && isFilterValueMissing(node.value)
+  ) {
     issues.push({
       severity: 'incomplete',
       code: 'filter-value-missing',
@@ -110,7 +241,7 @@ function validateFilterNode(
 
   if (
     node.operator === 'BETWEEN'
-    && (node.secondValue === undefined || node.secondValue === '')
+    && isFilterValueMissing(node.secondValue)
   ) {
     issues.push({
       severity: 'incomplete',
@@ -125,7 +256,10 @@ export function validateQueryModel(
   model: QueryModel
 ): QueryValidationIssue[] {
   const issues: QueryValidationIssue[] = []
-  const tableIds = new Set(model.tables.map((table) => table.id))
+  const tableIds = new Set([
+    ...model.tables.map((table) => table.id),
+    ...(model.externalTables ?? []).map((table) => table.id)
+  ])
   const aliases = new Set<string>()
 
   validateStableIds(model, issues)
@@ -175,10 +309,49 @@ export function validateQueryModel(
     }
 
     aliases.add(normalizedAlias)
+
+    if (table.source?.kind === 'subquery') {
+      validateQueryModel(table.source.query).forEach((issue) => {
+        issues.push({
+          ...issue,
+          message: `${table.alias} 子查詢：${issue.message}`,
+          targetId: issue.targetId ?? table.id
+        })
+      })
+    }
+  })
+
+  model.setOperations?.forEach((operation, index) => {
+    if (
+      operation.query.selectedFields.length
+      !== model.selectedFields.length
+    ) {
+      issues.push({
+        severity: 'error',
+        code: 'set-column-count-mismatch',
+        message: `${operation.operator} 第 ${index + 2} 段的輸出欄位數量必須與第一段相同。`,
+        targetId: operation.id
+      })
+    }
+
+    validateQueryModel(operation.query).forEach((issue) => {
+      issues.push({
+        ...issue,
+        message: `${operation.operator} 第 ${index + 2} 段：${issue.message}`,
+        targetId: issue.targetId ?? operation.id
+      })
+    })
   })
 
   model.selectedFields.forEach((selectedField) => {
-    if (!fieldExists(selectedField.field, tableIds)) {
+    if (selectedField.expression) {
+      validateExpression(
+        selectedField.expression,
+        tableIds,
+        issues,
+        selectedField.id
+      )
+    } else if (!fieldExists(selectedField.field, tableIds)) {
       issues.push({
         severity: 'error',
         code: 'selected-field-invalid',
@@ -201,13 +374,20 @@ export function validateQueryModel(
       })
     }
 
-    if (join.left.tableId === join.right.tableId) {
+    if (
+      join.joinedTableId !== undefined
+      && !tableIds.has(join.joinedTableId)
+    ) {
       issues.push({
         severity: 'error',
-        code: 'join-same-table',
-        message: 'JOIN 左右欄位不可來自同一個 table。',
+        code: 'join-table-invalid',
+        message: 'JOIN 參照了不存在的加入 table。',
         targetId: join.id
       })
+    }
+
+    if (join.conditions) {
+      validateFilterNode(join.conditions, tableIds, issues)
     }
   })
 
@@ -216,8 +396,11 @@ export function validateQueryModel(
 
     model.tables.slice(1).forEach((table) => {
       const join = model.joins.find((candidate) =>
-        candidate.right.tableId === table.id
-        && connectedTableIds.has(candidate.left.tableId)
+        (candidate.joinedTableId ?? candidate.right.tableId) === table.id
+        && (
+          connectedTableIds.has(candidate.left.tableId)
+          || candidate.left.tableId === table.id
+        )
       )
 
       if (!join) {
@@ -244,33 +427,15 @@ export function validateQueryModel(
     }
   })
 
-  if (
-    model.selectedFields.some((field) => field.aggregate !== 'none')
-  ) {
-    const groupedFields = new Set(
-      model.grouping.map((item) =>
-        `${item.field.tableId}\u0000${item.field.columnName}`
-      )
-    )
-
-    model.selectedFields
-      .filter((field) => field.aggregate === 'none')
-      .forEach((field) => {
-        const key = `${field.field.tableId}\u0000${field.field.columnName}`
-
-        if (!groupedFields.has(key)) {
-          issues.push({
-            severity: 'incomplete',
-            code: 'selected-field-not-grouped',
-            message: '使用聚合函式時，非聚合輸出欄位必須加入 GROUP BY。',
-            targetId: field.id
-          })
-        }
-      })
-  }
-
   model.sorting.forEach((sortingField) => {
-    if (!fieldExists(sortingField.field, tableIds)) {
+    if (sortingField.expression) {
+      validateExpression(
+        sortingField.expression,
+        tableIds,
+        issues,
+        sortingField.id
+      )
+    } else if (!fieldExists(sortingField.field, tableIds)) {
       issues.push({
         severity: 'error',
         code: 'sorting-field-invalid',

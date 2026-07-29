@@ -19,6 +19,29 @@ export interface QueryRouteOptions {
 
 const maximumResultRows = 200
 
+function isNamedParameterValues(value: unknown): boolean {
+  if (
+    typeof value !== 'object'
+    || value === null
+    || Array.isArray(value)
+  ) {
+    return false
+  }
+
+  return Object.entries(value).every(([name, parameterValue]) =>
+    /^[A-Za-z_][A-Za-z0-9_$]*$/.test(name)
+    && (
+      parameterValue === null
+      || typeof parameterValue === 'string'
+      || typeof parameterValue === 'boolean'
+      || (
+        typeof parameterValue === 'number'
+        && Number.isFinite(parameterValue)
+      )
+    )
+  )
+}
+
 export async function registerQueryRoutes(
   app: FastifyInstance,
   options: QueryRouteOptions
@@ -33,6 +56,10 @@ export async function registerQueryRoutes(
         || typeof body.schema !== 'string'
         || !body.schema.trim()
         || !isQueryModel(body.model)
+        || (
+          body.namedParameters !== undefined
+          && !isNamedParameterValues(body.namedParameters)
+        )
       ) {
         return reply.code(400).send({
           message: 'Invalid Query Model.'
@@ -57,12 +84,21 @@ export async function registerQueryRoutes(
         executionModel.pagination.limit = maximumResultRows + 1
       }
 
-      const compileResult = compileQuery(executionModel)
+      const compileResult = compileQuery(
+        executionModel,
+        body.namedParameters
+      )
 
       if (compileResult.status !== 'valid') {
         return reply.code(400).send({
           message: compileResult.issues[0]?.message
             ?? 'Query Model cannot be compiled.'
+        })
+      }
+
+      if (compileResult.namedParameters.length > 0) {
+        return reply.code(400).send({
+          message: 'Custom query parameters require values before execution.'
         })
       }
 
