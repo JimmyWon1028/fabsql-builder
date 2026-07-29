@@ -936,9 +936,18 @@ describe('MariaDB query compiler', () => {
 describe('Query Model state', () => {
   test('round trips through versioned JSON serialization', () => {
     const model = singleTableModel()
+    model.tables[0]!.collapsed = true
     const serialized = serializeQueryModel(model)
 
     expect(deserializeQueryModel(serialized)).toEqual(model)
+  })
+
+  test('rejects a non-boolean table collapsed state', () => {
+    const model = singleTableModel()
+    const table = model.tables[0] as unknown as Record<string, unknown>
+    table.collapsed = 'yes'
+
+    expect(isQueryModel(model)).toBe(false)
   })
 
   test('supports undo and redo with isolated snapshots', () => {

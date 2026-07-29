@@ -84,7 +84,7 @@ const tokenPatterns: Array<{
   },
   {
     type: 'parameter',
-    pattern: /^(?:\?|:[A-Za-z_][A-Za-z0-9_]*)/
+    pattern: /^(?:\?|[:@][A-Za-z_][A-Za-z0-9_]*)/
   },
   {
     type: 'number',
@@ -120,6 +120,7 @@ export function highlightSql(sql: string): SqlToken[] {
       const type = keywords.has(normalizedValue)
         ? 'keyword'
         : functions.has(normalizedValue)
+          || /^\s*\(/.test(remainingSql.slice(value.length))
           ? 'function'
           : 'plain'
 

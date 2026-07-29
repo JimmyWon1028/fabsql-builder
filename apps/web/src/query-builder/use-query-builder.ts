@@ -281,6 +281,33 @@ export function useQueryBuilder() {
     }, true)
   }
 
+  function setTableCollapsed(
+    tableId: string,
+    collapsed: boolean
+  ): void {
+    const table = activeModel.value.tables.find(
+      (item) => item.id === tableId
+    )
+
+    if (!table || Boolean(table.collapsed) === collapsed) {
+      return
+    }
+
+    mutate((draft) => {
+      const draftTable = draft.tables.find((item) => item.id === tableId)
+
+      if (!draftTable) {
+        return
+      }
+
+      if (collapsed) {
+        draftTable.collapsed = true
+      } else {
+        delete draftTable.collapsed
+      }
+    }, true)
+  }
+
   function removeTable(tableId: string): void {
     if (!activeModel.value.tables.some((table) => table.id === tableId)) {
       return
@@ -632,6 +659,7 @@ export function useQueryBuilder() {
     addTable,
     updateTableAlias,
     moveTable,
+    setTableCollapsed,
     removeTable,
     addSelectedField,
     setFieldSelected,

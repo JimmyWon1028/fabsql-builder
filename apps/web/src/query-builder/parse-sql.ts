@@ -416,7 +416,8 @@ function parseTables(
       alias,
       position: existingTable
         ? { ...existingTable.position }
-        : defaultTablePosition(index)
+        : defaultTablePosition(index),
+      collapsed: existingTable?.collapsed
     }
   })
   const tablesByQualifier = new Map<string, QueryTable>()

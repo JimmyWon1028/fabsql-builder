@@ -10,6 +10,7 @@ export interface QueryTable {
   name: string
   alias: string
   position: CanvasPosition
+  collapsed?: boolean
   source?: QueryDerivedTableSource
 }
 
@@ -478,6 +479,10 @@ function isQueryModelValue(
     && isRecord(table.position)
     && isFiniteNumber(table.position.x)
     && isFiniteNumber(table.position.y)
+    && (
+      table.collapsed === undefined
+      || typeof table.collapsed === 'boolean'
+    )
     && (
       table.source === undefined
       || (

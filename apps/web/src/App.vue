@@ -145,6 +145,7 @@ const {
   addTable,
   updateTableAlias,
   moveTable,
+  setTableCollapsed,
   removeTable,
   addSelectedField,
   setFieldSelected,
@@ -1961,6 +1962,7 @@ onBeforeUnmount(() => {
               @create-join="handleCreateJoin"
               @update-join-type="handleUpdateJoinType"
               @move-table="moveTable"
+              @set-table-collapsed="setTableCollapsed"
               @remove-table="handleRemoveTable"
               @update-alias="updateTableAlias"
               @open-subquery="enterSubquery"

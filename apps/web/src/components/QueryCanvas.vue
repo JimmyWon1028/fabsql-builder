@@ -40,6 +40,7 @@ const emit = defineEmits<{
   createJoin: [source: FieldReference, target: FieldReference]
   updateJoinType: [joinId: string, type: JoinType]
   moveTable: [tableId: string, position: CanvasPosition]
+  setTableCollapsed: [tableId: string, collapsed: boolean]
   removeTable: [tableId: string]
   updateAlias: [tableId: string, alias: string]
   openSubquery: [tableId: string]
@@ -1469,7 +1470,12 @@ watch(
       ].join('\u0000')
     ).join('\u0001'),
     () => props.model.tables.map((table) =>
-      `${table.id}\u0000${table.position.x}\u0000${table.position.y}`
+      [
+        table.id,
+        table.position.x,
+        table.position.y,
+        table.collapsed === true ? 'collapsed' : 'expanded'
+      ].join('\u0000')
     ).join('\u0001'),
     () => props.columnsByTable
   ],
@@ -1626,6 +1632,7 @@ defineExpose({
       :key="table.id"
       :ref="(element) => setTableElement(table.id, element)"
       class="table-node"
+      :class="{ 'table-node--collapsed': table.collapsed }"
       :style="{
         transform: getTableTransform(table)
       }"
@@ -1665,6 +1672,28 @@ defineExpose({
         </button>
         <button
           type="button"
+          class="icon-button table-node__collapse-button"
+          :aria-expanded="!table.collapsed"
+          :aria-label="table.collapsed
+            ? t('canvas.expandTable', { table: table.name })
+            : t('canvas.collapseTable', { table: table.name })"
+          :title="table.collapsed
+            ? t('canvas.expandTable', { table: table.name })
+            : t('canvas.collapseTable', { table: table.name })"
+          @dblclick.stop
+          @pointerdown.stop
+          @click.stop="emit(
+            'setTableCollapsed',
+            table.id,
+            !table.collapsed
+          )"
+        >
+          <span aria-hidden="true">
+            {{ table.collapsed ? '▸' : '▾' }}
+          </span>
+        </button>
+        <button
+          type="button"
           class="icon-button icon-button--danger"
           :aria-label="t('canvas.removeTable', { table: table.name })"
           :title="t('canvas.removeTableHint')"
@@ -1675,7 +1704,7 @@ defineExpose({
         </button>
       </header>
 
-      <label class="table-node__alias">
+      <label v-if="!table.collapsed" class="table-node__alias">
         <span>{{ t('canvas.alias') }}</span>
         <input
           :value="table.alias"
@@ -1690,14 +1719,14 @@ defineExpose({
       </label>
 
       <div
-        v-if="!displayColumnsByTable[table.id]"
+        v-if="!table.collapsed && !displayColumnsByTable[table.id]"
         class="table-node__loading"
       >
         {{ t('canvas.loadingFields') }}
       </div>
 
       <ul
-        v-else
+        v-else-if="!table.collapsed"
         class="table-node__fields"
         @scroll="handleFieldListScroll"
       >

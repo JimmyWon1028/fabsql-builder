@@ -49,6 +49,7 @@ const sqlEditError = ref('')
 const editingParameters = ref<CompileQueryResult['parameters']>([])
 const executionError = ref('')
 const executionResult = ref<ExecuteQueryResponse | null>(null)
+const sqlEditorHighlight = ref<HTMLPreElement | null>(null)
 let executionSequence = 0
 let copiedResetTimer: number | undefined
 
@@ -86,6 +87,9 @@ const displaySql = computed(() => {
 
 const highlightedSql = computed(() =>
   highlightSql(displaySql.value)
+)
+const highlightedSqlDraft = computed(() =>
+  highlightSql(sqlDraft.value)
 )
 const sqlForClipboard = computed(() =>
   isEditingSql.value ? sqlDraft.value : displaySql.value
@@ -220,6 +224,17 @@ function setSqlEditing(value: boolean): void {
 
   isEditingSql.value = value
   emit('editing-change', value)
+}
+
+function synchronizeSqlEditorScroll(event: Event): void {
+  const editor = event.currentTarget as HTMLTextAreaElement
+
+  if (!sqlEditorHighlight.value) {
+    return
+  }
+
+  sqlEditorHighlight.value.scrollTop = editor.scrollTop
+  sqlEditorHighlight.value.scrollLeft = editor.scrollLeft
 }
 
 function beginSqlEditing(): void {
@@ -423,14 +438,29 @@ onBeforeUnmount(() => {
         <p class="sql-preview__editing-hint">
           {{ t('workspace.sqlEditingHint') }}
         </p>
-        <textarea
-          v-model="sqlDraft"
-          class="sql-preview__editor"
-          :aria-label="t('workspace.sqlEditorLabel')"
-          autocomplete="off"
-          autocapitalize="off"
-          spellcheck="false"
-        ></textarea>
+        <div class="sql-preview__editor-shell">
+          <pre
+            ref="sqlEditorHighlight"
+            class="sql-preview__editor-highlight"
+            aria-hidden="true"
+          ><code><span
+            v-for="(token, index) in highlightedSqlDraft"
+            :key="`${index}-${token.type}`"
+            :class="token.type === 'plain'
+              ? undefined
+              : `sql-token sql-token--${token.type}`"
+          >{{ token.value }}</span></code></pre>
+          <textarea
+            v-model="sqlDraft"
+            class="sql-preview__editor"
+            :aria-label="t('workspace.sqlEditorLabel')"
+            autocomplete="off"
+            autocapitalize="off"
+            spellcheck="false"
+            wrap="off"
+            @scroll="synchronizeSqlEditorScroll"
+          ></textarea>
+        </div>
         <p
           v-if="sqlEditError"
           class="sql-preview__edit-error"
