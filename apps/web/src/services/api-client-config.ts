@@ -55,6 +55,22 @@ export function resolveSessionApiUrl(
   }
 }
 
+export function resolveSessionDatabaseName(
+  search: string
+): string | null {
+  const databaseName = new URLSearchParams(search).get('db')?.trim()
+
+  if (
+    !databaseName
+    || databaseName.length > 256
+    || /[\u0000-\u001f\u007f]/.test(databaseName)
+  ) {
+    return null
+  }
+
+  return databaseName
+}
+
 export function configureApiClient(config: ApiClientConfig): void {
   activeConfig = {
     provider: config.provider,

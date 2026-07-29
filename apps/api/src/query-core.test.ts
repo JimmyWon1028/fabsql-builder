@@ -170,6 +170,126 @@ describe('MariaDB query compiler', () => {
     ].join('\n'))
   })
 
+  test('compiles window expressions and CASE JOIN conditions', () => {
+    const model = singleTableModel()
+    model.tables[0]!.alias = 'M'
+    model.tables.push(table('products', 'prod', 'P'))
+    model.selectedFields.push({
+      id: 'selected-row-number',
+      field: {
+        tableId: 'orders',
+        columnName: 'id'
+      },
+      expression: {
+        kind: 'window',
+        expression: {
+          kind: 'function',
+          name: 'ROW_NUMBER',
+          arguments: []
+        },
+        partitioning: [],
+        ordering: [{
+          expression: {
+            kind: 'field',
+            field: {
+              tableId: 'orders',
+              columnName: 'id'
+            }
+          },
+          direction: 'ASC'
+        }]
+      },
+      alias: 'idx',
+      aggregate: 'none',
+      distinct: false
+    })
+    model.joins.push({
+      id: 'join-product',
+      type: 'LEFT',
+      joinedTableId: 'products',
+      left: {
+        tableId: 'orders',
+        columnName: 'product_id'
+      },
+      right: {
+        tableId: 'products',
+        columnName: 'prdno'
+      },
+      onExpression: {
+        kind: 'case',
+        branches: [{
+          when: {
+            kind: 'binary',
+            operator: '=',
+            left: {
+              kind: 'field',
+              field: {
+                tableId: 'orders',
+                columnName: 'trn'
+              }
+            },
+            right: {
+              kind: 'literal',
+              value: '2A'
+            }
+          },
+          then: {
+            kind: 'binary',
+            operator: '=',
+            left: {
+              kind: 'field',
+              field: {
+                tableId: 'orders',
+                columnName: 'product_id'
+              }
+            },
+            right: {
+              kind: 'field',
+              field: {
+                tableId: 'products',
+                columnName: 'prdno'
+              }
+            }
+          }
+        }],
+        elseExpression: {
+          kind: 'binary',
+          operator: '=',
+          left: {
+            kind: 'field',
+            field: {
+              tableId: 'orders',
+              columnName: 'fallback_product_id'
+            }
+          },
+          right: {
+            kind: 'field',
+            field: {
+              tableId: 'products',
+              columnName: 'prdno'
+            }
+          }
+        }
+      }
+    })
+
+    const result = compileQuery(model)
+    const restored = deserializeQueryModel(serializeQueryModel(model))
+
+    expect(result.status).toBe('valid')
+    expect(result.sql).toContain(
+      'ROW_NUMBER() Over(Order By `M`.`id` Asc) As `idx`'
+    )
+    expect(result.sql).toContain(
+      'On Case When (`M`.`trn` = ?) '
+      + 'Then (`M`.`product_id` = `P`.`prdno`) '
+      + 'Else (`M`.`fallback_product_id` = `P`.`prdno`) End'
+    )
+    expect(result.parameters).toEqual(['2A'])
+    expect(restored.joins[0]?.onExpression?.kind).toBe('case')
+    expect(restored.selectedFields[1]?.expression?.kind).toBe('window')
+  })
+
   test('rejects alias conflicts', () => {
     const model = singleTableModel()
     model.tables[0]!.alias = 'row'
@@ -362,6 +482,42 @@ describe('MariaDB query compiler', () => {
       'COUNT(Distinct `orders`.`id`) As `order_count`'
     )
     expect(result.sql).toContain('Group By `orders`.`customer_id`')
+  })
+
+  test('compiles a GROUP BY expression', () => {
+    const model = singleTableModel()
+    model.grouping.push({
+      id: 'group-type',
+      field: {
+        tableId: 'orders',
+        columnName: 'type'
+      },
+      expression: {
+        kind: 'function',
+        name: 'IfNull',
+        arguments: [
+          {
+            kind: 'field',
+            field: {
+              tableId: 'orders',
+              columnName: 'type'
+            }
+          },
+          {
+            kind: 'literal',
+            value: ''
+          }
+        ]
+      }
+    })
+
+    const result = compileQuery(model)
+
+    expect(result.status).toBe('valid')
+    expect(result.sql).toContain(
+      'Group By IfNull(`orders`.`type`, ?)'
+    )
+    expect(result.parameters).toEqual([''])
   })
 
   test('allows MariaDB non-strict GROUP BY output fields', () => {

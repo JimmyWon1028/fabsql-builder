@@ -326,6 +326,10 @@ export function useQueryBuilder() {
           join.left.tableId !== tableId
           && join.right.tableId !== tableId
           && (
+            !join.onExpression
+            || !queryExpressionReferencesTable(join.onExpression, tableId)
+          )
+          && (
             !join.conditions
             || !filterGroupReferencesTable(join.conditions, tableId)
           )

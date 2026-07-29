@@ -56,7 +56,11 @@ const expressionBinaryOperators = new Set<string>([
   '>',
   '>=',
   '<',
-  '<='
+  '<=',
+  'LIKE',
+  'NOT LIKE',
+  'AND',
+  'OR'
 ])
 
 export type SqlImportErrorCode =
@@ -555,6 +559,90 @@ function functionName(value: AstNode): string {
   return parts[0]!
 }
 
+function parseWindowExpression(
+  value: AstNode,
+  expression: QueryExpression,
+  tables: QueryTable[],
+  tablesByQualifier: Map<string, QueryTable>,
+  parameters: QueryParameterValue[],
+  parameterIndex: { value: number },
+  externalTables: QueryTable[]
+): QueryExpression {
+  if (!value.over) {
+    return expression
+  }
+
+  if (
+    !isNode(value.over)
+    || value.over.type !== 'window'
+    || !isNode(value.over.as_window_specification)
+    || !isNode(
+      value.over.as_window_specification.window_specification
+    )
+  ) {
+    return importError('unsupported-select-expression')
+  }
+
+  const specification =
+    value.over.as_window_specification.window_specification
+
+  if (
+    specification.name
+    || specification.window_frame_clause
+  ) {
+    return importError('unsupported-select-expression')
+  }
+
+  const partitioning = Array.isArray(specification.partitionby)
+    ? specification.partitionby.map((item) => {
+        const expressionNode = isNode(item) && isNode(item.expr)
+          ? item.expr
+          : item
+
+        return parseExpression(
+          expressionNode,
+          tables,
+          tablesByQualifier,
+          parameters,
+          parameterIndex,
+          externalTables
+        )
+      })
+    : []
+  const ordering = Array.isArray(specification.orderby)
+    ? specification.orderby.map((item) => {
+        if (!isNode(item) || !isNode(item.expr)) {
+          return importError('unsupported-select-expression')
+        }
+
+        const direction = stringValue(item.type).toUpperCase() || 'ASC'
+
+        if (direction !== 'ASC' && direction !== 'DESC') {
+          return importError('unsupported-select-expression')
+        }
+
+        return {
+          expression: parseExpression(
+            item.expr,
+            tables,
+            tablesByQualifier,
+            parameters,
+            parameterIndex,
+            externalTables
+          ),
+          direction: direction as 'ASC' | 'DESC'
+        }
+      })
+    : []
+
+  return {
+    kind: 'window',
+    expression,
+    partitioning,
+    ordering
+  }
+}
+
 function parseExpression(
   value: unknown,
   tables: QueryTable[],
@@ -691,7 +779,7 @@ function parseExpression(
       ? value.args.value
       : []
 
-    return {
+    return parseWindowExpression(value, {
       kind: 'function',
       name: functionName(value),
       arguments: args.map((argument) =>
@@ -704,7 +792,7 @@ function parseExpression(
           externalTables
         )
       )
-    }
+    }, tables, tablesByQualifier, parameters, parameterIndex, externalTables)
   }
 
   if (
@@ -739,7 +827,7 @@ function parseExpression(
         })
       : undefined
 
-    return {
+    return parseWindowExpression(value, {
       kind: 'aggregate',
       name: value.name,
       argument: parseExpression(
@@ -752,7 +840,7 @@ function parseExpression(
       ),
       distinct: value.args.distinct === 'DISTINCT',
       ordering
-    }
+    }, tables, tablesByQualifier, parameters, parameterIndex, externalTables)
   }
 
   if (
@@ -772,7 +860,11 @@ function parseExpression(
         | '>'
         | '>='
         | '<'
-        | '<=',
+        | '<='
+        | 'LIKE'
+        | 'NOT LIKE'
+        | 'AND'
+        | 'OR',
       left: parseExpression(
         value.left,
         tables,
@@ -832,6 +924,14 @@ function firstExpressionField(
       return firstExpressionField(expression.argument)
         ?? expression.ordering
           ?.map((ordering) => firstExpressionField(ordering.expression))
+          .find(Boolean)
+    case 'window':
+      return firstExpressionField(expression.expression)
+        ?? expression.partitioning
+          .map(firstExpressionField)
+          .find(Boolean)
+        ?? expression.ordering
+          .map((ordering) => firstExpressionField(ordering.expression))
           .find(Boolean)
     case 'subquery':
       return undefined
@@ -1010,6 +1110,69 @@ function tryJoinFields(
     : null
 }
 
+function findJoinFields(
+  value: unknown,
+  tables: QueryTable[],
+  tablesByQualifier: Map<string, QueryTable>,
+  currentTable: QueryTable,
+  connectedTableIds: Set<string>
+): { left: FieldReference; right: FieldReference } | null {
+  if (!isNode(value)) {
+    return null
+  }
+
+  const direct = tryJoinFields(
+    value,
+    tables,
+    tablesByQualifier,
+    currentTable,
+    connectedTableIds
+  )
+
+  if (direct) {
+    return direct
+  }
+
+  const childValues: unknown[] = []
+
+  if (value.type === 'binary_expr') {
+    childValues.push(value.left, value.right)
+  } else if (value.type === 'unary_expr') {
+    childValues.push(value.expr)
+  } else if (value.type === 'case' && Array.isArray(value.args)) {
+    value.args.forEach((argument) => {
+      if (isNode(argument)) {
+        childValues.push(argument.cond, argument.result)
+      }
+    })
+  } else if (
+    (value.type === 'function' || value.type === 'aggr_func')
+    && isNode(value.args)
+  ) {
+    if (Array.isArray(value.args.value)) {
+      childValues.push(...value.args.value)
+    }
+
+    childValues.push(value.args.expr)
+  }
+
+  for (const child of childValues) {
+    const fields = findJoinFields(
+      child,
+      tables,
+      tablesByQualifier,
+      currentTable,
+      connectedTableIds
+    )
+
+    if (fields) {
+      return fields
+    }
+  }
+
+  return null
+}
+
 function parseJoins(
   astTables: AstNode[],
   tables: QueryTable[],
@@ -1045,30 +1208,52 @@ function parseJoins(
       ))
     )
 
-    if (primaryIndex < 0) {
-      return importError('unsupported-join-condition')
-    }
-    const primary = tryJoinFields(
-      clauses[primaryIndex]!,
+    const directPrimary = primaryIndex >= 0
+      ? tryJoinFields(
+          clauses[primaryIndex]!,
+          tables,
+          tablesByQualifier,
+          currentTable,
+          connectedTableIds
+        )
+      : null
+    const primary = directPrimary ?? findJoinFields(
+      astTable.on,
       tables,
       tablesByQualifier,
       currentTable,
       connectedTableIds
-    )!
-    const nodeIndex = { value: (index + 1) * 1000 }
-    const extraConditions = clauses
-      .filter((_, clauseIndex) => clauseIndex !== primaryIndex)
-      .map((clause) =>
-        parseFilterNode(
-          clause,
+    )
+
+    if (!primary) {
+      return importError('unsupported-join-condition')
+    }
+
+    const onExpression = directPrimary
+      ? undefined
+      : parseExpression(
+          astTable.on,
           tables,
           tablesByQualifier,
           parameters,
-          parameterIndex,
-          nodeIndex
+          parameterIndex
         )
-      )
-      .filter((condition): condition is FilterNode => Boolean(condition))
+    const nodeIndex = { value: (index + 1) * 1000 }
+    const extraConditions = directPrimary
+      ? clauses
+          .filter((_, clauseIndex) => clauseIndex !== primaryIndex)
+          .map((clause) =>
+            parseFilterNode(
+              clause,
+              tables,
+              tablesByQualifier,
+              parameters,
+              parameterIndex,
+              nodeIndex
+            )
+          )
+          .filter((condition): condition is FilterNode => Boolean(condition))
+      : []
     const conditions: FilterGroup | undefined = extraConditions.length > 0
       ? {
           id: createImportId('join-filter-root', index),
@@ -1085,6 +1270,7 @@ function parseJoins(
       joinedTableId: currentTable.id,
       left: primary.left,
       right: primary.right,
+      onExpression,
       conditions
     }
   })
@@ -1139,7 +1325,38 @@ function parseFilterNode(
   parameterIndex: { value: number },
   nodeIndex: { value: number }
 ): FilterNode | null {
-  if (!isNode(value) || value.type !== 'binary_expr') {
+  if (!isNode(value)) {
+    return importError('unsupported-filter')
+  }
+
+  if (value.type === 'function') {
+    const expression = parseExpression(
+      value,
+      tables,
+      tablesByQualifier,
+      parameters,
+      parameterIndex
+    )
+    const field = firstExpressionField(expression)
+
+    if (!field) {
+      return importError('unsupported-filter')
+    }
+
+    return {
+      id: createImportId('filter', nodeIndex.value++),
+      kind: 'condition',
+      field,
+      expression,
+      operator: '=',
+      rightExpression: {
+        kind: 'literal',
+        value: true
+      }
+    }
+  }
+
+  if (value.type !== 'binary_expr') {
     return importError('unsupported-filter')
   }
 
@@ -1283,6 +1500,7 @@ function parseFilterNode(
       || value.right.type === 'aggr_func'
       || value.right.type === 'binary_expr'
       || value.right.type === 'unary_expr'
+      || value.right.type === 'case'
       || isNode(value.right.ast)
     )
   ) {
@@ -1294,11 +1512,20 @@ function parseFilterNode(
       parameterIndex
     )
   } else {
-    condition.value = parseParameterValue(
+    const parsedValue = parseParameterValue(
       value.right,
       parameters,
       parameterIndex
     )
+
+    if (parsedValue === '') {
+      condition.rightExpression = {
+        kind: 'literal',
+        value: ''
+      }
+    } else {
+      condition.value = parsedValue
+    }
   }
   return condition
 }
@@ -1356,7 +1583,10 @@ function parseFilters(
 function parseGrouping(
   groupBy: unknown,
   tables: QueryTable[],
-  tablesByQualifier: Map<string, QueryTable>
+  tablesByQualifier: Map<string, QueryTable>,
+  parameters: QueryParameterValue[],
+  parameterIndex: { value: number },
+  externalTables: QueryTable[] = []
 ): QueryModel['grouping'] {
   if (!groupBy) {
     return []
@@ -1368,14 +1598,28 @@ function parseGrouping(
     return importError('unsupported-grouping')
   }
 
-  return columns.map((column, index) => ({
-    id: createImportId('group', index),
-    field: parseColumnReference(
+  return columns.map((column, index) => {
+    const parsedExpression = parseExpression(
       column,
       tables,
-      tablesByQualifier
+      tablesByQualifier,
+      parameters,
+      parameterIndex,
+      externalTables
     )
-  }))
+    const field = firstExpressionField(parsedExpression) ?? {
+      tableId: tables[0]!.id,
+      columnName: `grouping_${index + 1}`
+    }
+
+    return {
+      id: createImportId('group', index),
+      field,
+      expression: parsedExpression.kind === 'field'
+        ? undefined
+        : parsedExpression
+    }
+  })
 }
 
 function parseSorting(
@@ -1583,7 +1827,10 @@ function parseSelectAst(
     grouping: parseGrouping(
       parsed.groupby,
       tables,
-      tablesByQualifier
+      tablesByQualifier,
+      parameters,
+      parameterIndex,
+      externalTables
     ),
     sorting: parseSorting(
       parsed.orderby,

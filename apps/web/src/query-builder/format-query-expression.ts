@@ -57,6 +57,31 @@ export function formatQueryExpression(
         formatQueryExpression(expression.argument, tables)
       }${ordering})`
     }
+    case 'window': {
+      const clauses: string[] = []
+
+      if (expression.partitioning.length > 0) {
+        clauses.push(
+          'PARTITION BY ' + expression.partitioning
+            .map((item) => formatQueryExpression(item, tables))
+            .join(', ')
+        )
+      }
+
+      if (expression.ordering.length > 0) {
+        clauses.push(
+          'ORDER BY ' + expression.ordering
+            .map((item) =>
+              `${formatQueryExpression(item.expression, tables)} `
+              + item.direction
+            )
+            .join(', ')
+        )
+      }
+
+      return `${formatQueryExpression(expression.expression, tables)} `
+        + `OVER(${clauses.join(' ')})`
+    }
     case 'subquery':
       return '(SELECT …)'
     case 'case': {

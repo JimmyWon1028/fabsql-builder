@@ -35,6 +35,9 @@ changes and known limitations.
 - Parse functions, arithmetic expressions, `CASE WHEN`, scalar subqueries,
   derived tables, `UNION`, `UNION ALL`, `IN (SELECT ...)`, comments, and
   custom `@parameters`.
+- Parse boolean expressions, GROUP BY expressions, basic window functions
+  with `PARTITION BY`/`ORDER BY`, and complex `ON CASE ... END` JOIN
+  expressions.
 - Navigate between the main query, UNION branches, and derived-table
   subqueries from the upper-left canvas navigation.
 - Open and edit subquery details.
@@ -59,7 +62,8 @@ changes and known limitations.
   mouse or keyboard.
 - Collapse each resizable panel into a drawer handle and reopen it by
   clicking or dragging the handle.
-- Maximize and restore the Query Canvas or SQL/Result panel.
+- Maximize and restore the Query Canvas or SQL/Result panel without retaining
+  the main header toolbar above the maximized region.
 - Pan the entire relationship diagram by dragging empty canvas space with
   the left mouse button.
 - Export the complete current query, UNION branch, or subquery diagram to
@@ -68,6 +72,10 @@ changes and known limitations.
   dialog.
 - Select exactly one backend mode: built-in Fastify, Laravel JWT API, or
   Laravel ERP session.
+- Launch Session mode with
+  `/fabsql/?session=api.example.com/fabsql&db=database_name`.
+- Open the complete current URL in a new tab or enter browser full-screen
+  mode from the header icon controls.
 - Switch between English, Traditional Chinese, and Simplified Chinese.
 - Choose from blue, monochrome, red, and green workspace themes.
 
@@ -101,6 +109,8 @@ The reverse parser currently supports:
 - Nested `AND`/`OR`, `NULL`, `IN`, `BETWEEN`, and `IN (SELECT ...)`.
 - Functions, literals, arithmetic, comparisons, `CASE WHEN`, and scalar
   subqueries.
+- Boolean expressions, GROUP BY expressions, basic window functions, and
+  complete complex JOIN expressions.
 - Derived tables, outer-column references, `UNION`, and `UNION ALL`.
 - `GROUP BY`, `ORDER BY`, `LIMIT`, `OFFSET`, and custom `@parameters`.
 
@@ -113,8 +123,8 @@ compiler then generates the SQL.
 
 Only a read-only SELECT query set is accepted. Non-SELECT statements,
 multiple statements, and syntax that cannot be represented by the current
-Query Model are rejected. CTEs, `HAVING`, and window functions are not yet in
-the verified feature set.
+Query Model are rejected. CTEs, `HAVING`, named windows, and window frames
+are not yet supported.
 
 ## Custom Parameters and Run
 

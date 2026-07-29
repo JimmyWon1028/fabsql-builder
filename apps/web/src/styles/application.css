@@ -334,7 +334,14 @@ pre {
     0 0 0 2px color-mix(in srgb, var(--accent) 18%, transparent);
 }
 
-.environment-settings-button {
+.application-header-controls {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.application-header-icon-button {
   width: 34px;
   height: 34px;
   flex: 0 0 34px;
@@ -342,11 +349,27 @@ pre {
   place-items: center;
   padding: 0;
   color: rgb(255 255 255 / 90%);
+  text-decoration: none;
   background: transparent;
   border: 0;
 }
 
-.environment-settings-button svg {
+.open-new-tab-icon {
+  width: 17px;
+  height: 17px;
+  stroke: currentcolor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.application-header-icon-button .region-maximize-icon {
+  width: 17px;
+  height: 17px;
+  stroke: currentcolor;
+}
+
+.environment-settings-icon {
   width: 18px;
   height: 18px;
   stroke: currentcolor;
@@ -355,13 +378,13 @@ pre {
   stroke-linejoin: round;
 }
 
-.environment-settings-button:hover,
-.environment-settings-button:focus-visible {
+.application-header-icon-button:hover:not(:disabled),
+.application-header-icon-button:focus-visible {
   color: #fff;
   background: rgb(255 255 255 / 13%);
 }
 
-.environment-settings-button:focus-visible {
+.application-header-icon-button:focus-visible {
   outline: 1px solid rgb(255 255 255 / 72%);
   outline-offset: 1px;
 }
@@ -957,7 +980,7 @@ body.is-resizing-workspace-panel .query-workspace-panel {
 
 .workspace-region--maximized {
   position: fixed !important;
-  top: var(--application-header-height) !important;
+  top: 0 !important;
   right: 0 !important;
   bottom: 0 !important;
   left: 0 !important;

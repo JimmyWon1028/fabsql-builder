@@ -141,6 +141,31 @@ function compileExpression(
         compileExpression(expression.argument, context)
       }${ordering})`
     }
+    case 'window': {
+      const clauses: string[] = []
+
+      if (expression.partitioning.length > 0) {
+        clauses.push(
+          'Partition By ' + expression.partitioning
+            .map((item) => compileExpression(item, context))
+            .join(', ')
+        )
+      }
+
+      if (expression.ordering.length > 0) {
+        clauses.push(
+          'Order By ' + expression.ordering
+            .map((item) =>
+              `${compileExpression(item.expression, context)} `
+              + titleCaseKeyword(item.direction)
+            )
+            .join(', ')
+        )
+      }
+
+      return `${compileExpression(expression.expression, context)} `
+        + `Over(${clauses.join(' ')})`
+    }
     case 'subquery': {
       const result = compileQuery(
         expression.query,
@@ -356,8 +381,10 @@ export function compileQuery(
 
     sqlLines.push(
       `  ${joinKeyword} ${tableReference(table, context)}`,
-      `  On ${fieldReference(join.left, tablesById)} = `
-        + fieldReference(join.right, tablesById)
+      `  On ${join.onExpression
+        ? compileExpression(join.onExpression, context)
+        : `${fieldReference(join.left, tablesById)} = `
+          + fieldReference(join.right, tablesById)}`
     )
 
     if (join.conditions && join.conditions.children.length > 0) {
@@ -389,7 +416,11 @@ export function compileQuery(
     sqlLines.push(
       'Group By '
         + model.grouping
-          .map((item) => fieldReference(item.field, tablesById))
+          .map((item) =>
+            item.expression
+              ? compileExpression(item.expression, context)
+              : fieldReference(item.field, tablesById)
+          )
           .join(', ')
     )
   }

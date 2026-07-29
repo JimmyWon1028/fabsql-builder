@@ -33,6 +33,9 @@ SQL Preview 與右側 Query Inspector。
 - SQL 反向解析支援函式、算術 expression、`CASE WHEN`、scalar
   subquery、derived table、`UNION`／`UNION ALL`、`IN (SELECT …)`、
   自訂 `@parameter` 與註解。
+- SQL 反向解析支援布林 expression、GROUP BY expression、具有
+  `PARTITION BY`／`ORDER BY` 的基本 Window Function，以及完整
+  `ON CASE ... END` 複合 JOIN expression。
 - 主查詢、每段 UNION 與 derived table 子查詢可由 Canvas 左上角
   導覽切換；子查詢節點可開啟明細並編輯。
 - 未修改 SQL 再次儲存時會保留資料表 ID、節點位置、完整 schema
@@ -52,13 +55,19 @@ SQL Preview 與右側 Query Inspector。
 - 左側 Schema Explorer、右側 Query Inspector 與下方 SQL／Result
   區都可連續縮小，接近 0 時會收合成抽屜把手；把手可反向拖曳
   展開，或單擊以預設尺寸開啟。
-- Query Canvas 與下方 SQL／Result 區可在目前頁面內最大化及還原。
+- Query Canvas 與下方 SQL／Result 區可在目前頁面內最大化及還原；
+  最大化時會覆蓋頂端主工具列並使用完整 viewport。
 - Query Canvas 空白處可用滑鼠左鍵拖曳整張關聯圖。
 - Query Canvas 右上角可將目前主查詢、UNION 或子查詢層級的完整
   資料表節點與 JOIN 匯出為 PNG，不受可視範圍限制。
 - 頂端環境設定可測試及套用 MariaDB Socket 或 Host／Port 連線。
 - API 來源可在內建 Fastify 與外部 Laravel 之間單選切換；預設仍使用
   Fastify，Laravel 預設網址為 `http://api.jl.test`。
+- Session 模式可使用
+  `/fabsql/?session=api.example.com/fabsql&db=database_name`
+  指定 API base 與啟動資料庫。
+- 頂端 icon 可將完整目前 URL 開到新頁籤、切換瀏覽器全螢幕及開啟
+  環境設定。
 - 環境設定可即時切換英語、繁體中文與簡體中文介面。
 - 提供藍色、黑白白底、紅色與綠色四套完整工作區主題。
 - 語言與主題偏好會寫入目前執行環境的持久化設定並於下次開啟恢復。
@@ -84,6 +93,8 @@ Model。成功後以一次 history commit 更新關聯圖；失敗時保留 SQL 
 - `JOIN`、`INNER JOIN`、`LEFT JOIN`、`RIGHT JOIN` 與額外 ON 條件。
 - 巢狀 AND／OR、NULL、IN、BETWEEN 與 `IN (SELECT …)`。
 - 函式、literal、算術式、比較式、`CASE WHEN` 與 scalar subquery。
+- 布林 expression、GROUP BY expression、基本 Window Function
+  與完整複合 JOIN expression。
 - Derived table、外層欄位參照、`UNION`／`UNION ALL`。
 - GROUP BY、ORDER BY、LIMIT、OFFSET 與自訂 `@parameter`。
 
@@ -94,8 +105,8 @@ Preview 會保留原本的註解、空白、大小寫與排列；勾選「識別
 失效並改由 compiler 產生 SQL。
 
 仍只接受單一唯讀 SELECT 查詢集合；非 SELECT、多 statement，以及
-目前 Query Model 無法完整表達的語法會阻止儲存。CTE、HAVING、Window
-Function 等尚未列入已驗證範圍。
+目前 Query Model 無法完整表達的語法會阻止儲存。CTE、HAVING、
+named window 與 window frame 尚未支援。
 
 ## 自訂參數與 Run
 

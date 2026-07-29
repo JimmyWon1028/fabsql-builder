@@ -38,11 +38,11 @@ import {
   useApplicationPreferences
 } from './preferences/use-application-preferences'
 import { useQueryBuilder } from './query-builder/use-query-builder'
+import { resolveSessionDatabaseName } from './services/api-client-config'
 import {
-  getColumns,
-  getDatabases,
-  getHealth
-} from './services/schema-api'
+  LaravelAuthenticationRequiredError,
+  LaravelSessionAuthenticationRequiredError
+} from './services/laravel-auth'
 import {
   getPersistentItem,
   onElectronCloseRequested,
@@ -50,9 +50,10 @@ import {
   setPersistentItem
 } from './services/persistent-storage'
 import {
-  LaravelAuthenticationRequiredError,
-  LaravelSessionAuthenticationRequiredError
-} from './services/laravel-auth'
+  getColumns,
+  getDatabases,
+  getHealth
+} from './services/schema-api'
 
 type MaximizedRegion = 'canvas' | 'workspace'
 
@@ -88,6 +89,9 @@ const namedParameterValues = ref<Record<string, string>>({})
 const uiScale = ref(1)
 const maximizedRegion = ref<MaximizedRegion | null>(null)
 const isEnvironmentSettingsOpen = ref(false)
+const currentPageUrl = ref('')
+const isFullscreen = ref(false)
+const fullscreenSupported = ref(false)
 const columnsByTable = ref<Record<string, SchemaColumn[]>>({})
 const notification = ref('')
 let notificationTimer: number | undefined
@@ -128,10 +132,31 @@ const authenticationRequiredLabel = computed(() =>
     ? t('app.sessionRequired')
     : t('app.authenticationRequired')
 )
+const fullscreenActionLabel = computed(() =>
+  isFullscreen.value
+    ? t('app.exitFullscreen')
+    : t('app.enterFullscreen')
+)
 
 function isAuthenticationRequiredError(error: unknown): boolean {
   return error instanceof LaravelAuthenticationRequiredError
     || error instanceof LaravelSessionAuthenticationRequiredError
+}
+
+function handleFullscreenChange(): void {
+  isFullscreen.value = Boolean(document.fullscreenElement)
+}
+
+async function toggleFullscreen(): Promise<void> {
+  try {
+    if (document.fullscreenElement) {
+      await document.exitFullscreen()
+    } else {
+      await document.documentElement.requestFullscreen()
+    }
+  } catch {
+    showNotification(t('app.noticeFullscreenFailed'))
+  }
 }
 
 const {
@@ -1544,13 +1569,20 @@ watch(
 )
 
 onMounted(async () => {
+  currentPageUrl.value = window.location.href
+  fullscreenSupported.value = document.fullscreenEnabled
+  handleFullscreenChange()
   window.addEventListener('resize', handleWindowResize)
   window.addEventListener('keydown', handleHistoryShortcut)
   window.addEventListener('pagehide', handlePageHide)
+  document.addEventListener('fullscreenchange', handleFullscreenChange)
   removeElectronCloseListener = onElectronCloseRequested(
     flushWorkspaceState
   )
   let workspaceState: PersistedWorkspaceState | null = null
+  const requestedSessionDatabase = apiProvider.value === 'session'
+    ? resolveSessionDatabaseName(window.location.search)
+    : null
 
   try {
     workspaceState = await readWorkspaceState()
@@ -1581,14 +1613,30 @@ onMounted(async () => {
     health.value = await getHealth()
     const databaseResponse = await getDatabases()
     databases.value = databaseResponse.databases
+    const requestedDatabase = requestedSessionDatabase
+      && databases.value.includes(requestedSessionDatabase)
+      ? requestedSessionDatabase
+      : null
     const canRestoreWorkspace = Boolean(
       workspaceState
       && databases.value.includes(workspaceState.databaseName)
+      && (
+        !requestedDatabase
+        || workspaceState.databaseName === requestedDatabase
+      )
     )
 
-    selectedDatabase.value = canRestoreWorkspace
-      ? workspaceState!.databaseName
-      : health.value.database.name
+    selectedDatabase.value = requestedDatabase ?? (
+      canRestoreWorkspace
+        ? workspaceState!.databaseName
+        : health.value.database.name
+    )
+
+    if (requestedSessionDatabase && !requestedDatabase) {
+      showNotification(t('app.noticeDatabaseUnavailable', {
+        database: requestedSessionDatabase
+      }))
+    }
 
     if (canRestoreWorkspace) {
       columnsByTable.value = {}
@@ -1616,6 +1664,7 @@ onBeforeUnmount(() => {
   window.removeEventListener('resize', handleWindowResize)
   window.removeEventListener('keydown', handleHistoryShortcut)
   window.removeEventListener('pagehide', handlePageHide)
+  document.removeEventListener('fullscreenchange', handleFullscreenChange)
   removeElectronCloseListener()
   document.body.classList.remove('is-resizing-schema')
   document.body.classList.remove('is-resizing-inspector')
@@ -1721,7 +1770,7 @@ onBeforeUnmount(() => {
         <template v-if="health && !authenticationRequired">
           <span>
             {{ apiProviderLabel }}
-            · MariaDB {{ health.database.version }} ·
+            ·
           </span>
           <select
             v-if="isEditingDatabase"
@@ -1764,33 +1813,66 @@ onBeforeUnmount(() => {
           {{ t('app.connecting') }}
         </span>
       </div>
-      <button
-        class="environment-settings-button"
-        type="button"
-        :disabled="isSqlEditing"
-        :aria-label="t('app.environmentSettings')"
-        :title="t('app.environmentSettings')"
-        @click="isEnvironmentSettingsOpen = true"
-      >
-        <svg
-          viewBox="0 0 24 24"
-          fill="none"
-          aria-hidden="true"
+      <div class="application-header-controls">
+        <a
+          class="application-header-icon-button"
+          :href="currentPageUrl"
+          target="_blank"
+          rel="noopener noreferrer"
+          :aria-label="t('app.openCurrentUrlInNewTab')"
+          :title="t('app.openCurrentUrlInNewTab')"
         >
-          <path
-            d="M12 8.75A3.25 3.25 0 1 0 12 15.25
-              3.25 3.25 0 0 0 12 8.75Z"
-          />
-          <path
-            d="M19.15 13.3a7.78 7.78 0 0 0 0-2.6l2-1.55-2-3.46-2.47
-              1a7.42 7.42 0 0 0-2.25-1.3L14.08 2h-4.16l-.35
-              3.39a7.42 7.42 0 0 0-2.25 1.3l-2.47-1-2 3.46
-              2 1.55a7.78 7.78 0 0 0 0 2.6l-2 1.55 2 3.46
-              2.47-1a7.42 7.42 0 0 0 2.25 1.3l.35 3.39h4.16
-              l.35-3.39a7.42 7.42 0 0 0 2.25-1.3l2.47 1 2-3.46-2-1.55Z"
-          />
-        </svg>
-      </button>
+          <svg
+            class="open-new-tab-icon"
+            viewBox="0 0 24 24"
+            fill="none"
+            aria-hidden="true"
+          >
+            <path d="M14 5h5v5 M19 5l-8 8" />
+            <path d="M17 13v5a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V8
+              a1 1 0 0 1 1-1h5"
+            />
+          </svg>
+        </a>
+        <button
+          class="application-header-icon-button"
+          type="button"
+          :disabled="!fullscreenSupported"
+          :aria-label="fullscreenActionLabel"
+          :title="fullscreenActionLabel"
+          @click="toggleFullscreen"
+        >
+          <RegionMaximizeIcon :maximized="isFullscreen" />
+        </button>
+        <button
+          class="application-header-icon-button"
+          type="button"
+          :disabled="isSqlEditing"
+          :aria-label="t('app.environmentSettings')"
+          :title="t('app.environmentSettings')"
+          @click="isEnvironmentSettingsOpen = true"
+        >
+          <svg
+            class="environment-settings-icon"
+            viewBox="0 0 24 24"
+            fill="none"
+            aria-hidden="true"
+          >
+            <path
+              d="M12 8.75A3.25 3.25 0 1 0 12 15.25
+                3.25 3.25 0 0 0 12 8.75Z"
+            />
+            <path
+              d="M19.15 13.3a7.78 7.78 0 0 0 0-2.6l2-1.55-2-3.46-2.47
+                1a7.42 7.42 0 0 0-2.25-1.3L14.08 2h-4.16l-.35
+                3.39a7.42 7.42 0 0 0-2.25 1.3l-2.47-1-2 3.46
+                2 1.55a7.78 7.78 0 0 0 0 2.6l-2 1.55 2 3.46
+                2.47-1a7.42 7.42 0 0 0 2.25 1.3l.35 3.39h4.16
+                l.35-3.39a7.42 7.42 0 0 0 2.25-1.3l2.47 1 2-3.46-2-1.55Z"
+            />
+          </svg>
+        </button>
+      </div>
     </header>
 
     <main

@@ -364,7 +364,11 @@ function updateGroupingField(
 ): void {
   emit('setGrouping', props.model.grouping.map((grouping) =>
     grouping.id === groupingId
-      ? { ...grouping, field }
+      ? {
+          ...grouping,
+          field,
+          expression: undefined
+        }
       : grouping
   ))
 }
@@ -701,7 +705,9 @@ onBeforeUnmount(() => {
             </select>
             <div class="join-list__conditions">
               <code>
-                {{ fieldLabel(join.left) }} = {{ fieldLabel(join.right) }}
+                {{ join.onExpression
+                  ? formatQueryExpression(join.onExpression, model.tables)
+                  : `${fieldLabel(join.left)} = ${fieldLabel(join.right)}` }}
               </code>
               <code
                 v-if="join.conditions
@@ -770,7 +776,21 @@ onBeforeUnmount(() => {
             :key="grouping.id"
             class="option-row"
           >
+            <code
+              v-if="grouping.expression"
+              class="option-row__sorting-expression"
+              :title="formatQueryExpression(
+                grouping.expression,
+                model.tables
+              )"
+            >
+              {{ formatQueryExpression(
+                grouping.expression,
+                model.tables
+              ) }}
+            </code>
             <select
+              v-else
               :value="encodeField(grouping.field)"
               @change="updateGroupingField(
                 grouping.id,

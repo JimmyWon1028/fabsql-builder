@@ -59,6 +59,10 @@ export interface QueryBinaryExpression {
     | '>='
     | '<'
     | '<='
+    | 'LIKE'
+    | 'NOT LIKE'
+    | 'AND'
+    | 'OR'
   left: QueryExpression
   right: QueryExpression
 }
@@ -80,6 +84,13 @@ export interface QueryAggregateExpression {
 export interface QueryExpressionOrdering {
   expression: QueryExpression
   direction: SortDirection
+}
+
+export interface QueryWindowExpression {
+  kind: 'window'
+  expression: QueryExpression
+  partitioning: QueryExpression[]
+  ordering: QueryExpressionOrdering[]
 }
 
 export interface QuerySubqueryExpression {
@@ -107,6 +118,7 @@ export type QueryExpression =
   | QueryBinaryExpression
   | QueryUnaryExpression
   | QueryAggregateExpression
+  | QueryWindowExpression
   | QuerySubqueryExpression
   | QueryCaseExpression
 
@@ -135,6 +147,7 @@ export interface QueryJoin {
   joinedTableId?: string
   left: FieldReference
   right: FieldReference
+  onExpression?: QueryExpression
   conditions?: FilterGroup
 }
 
@@ -181,6 +194,7 @@ export type FilterNode = FilterCondition | FilterGroup
 export interface GroupingField {
   id: string
   field: FieldReference
+  expression?: QueryExpression
 }
 
 export type SortDirection = 'ASC' | 'DESC'
@@ -337,6 +351,10 @@ function isQueryExpression(
         || value.operator === '>='
         || value.operator === '<'
         || value.operator === '<='
+        || value.operator === 'LIKE'
+        || value.operator === 'NOT LIKE'
+        || value.operator === 'AND'
+        || value.operator === 'OR'
       )
         && isQueryExpression(value.left, depth + 1)
         && isQueryExpression(value.right, depth + 1)
@@ -358,6 +376,18 @@ function isQueryExpression(
               && isQueryExpression(ordering.expression, depth + 1)
             )
           )
+        )
+    case 'window':
+      return isQueryExpression(value.expression, depth + 1)
+        && Array.isArray(value.partitioning)
+        && value.partitioning.every((expression) =>
+          isQueryExpression(expression, depth + 1)
+        )
+        && Array.isArray(value.ordering)
+        && value.ordering.every((ordering) =>
+          isRecord(ordering)
+          && sortDirections.has(ordering.direction)
+          && isQueryExpression(ordering.expression, depth + 1)
         )
     case 'subquery':
       return isQueryModelValue(value.query, depth + 1)
@@ -515,6 +545,10 @@ function isQueryModelValue(
       && isFieldReference(join.left)
       && isFieldReference(join.right)
       && (
+        join.onExpression === undefined
+        || isQueryExpression(join.onExpression)
+      )
+      && (
         join.conditions === undefined
         || isFilterGroup(join.conditions)
       )
@@ -524,6 +558,10 @@ function isQueryModelValue(
       isRecord(grouping)
       && typeof grouping.id === 'string'
       && isFieldReference(grouping.field)
+      && (
+        grouping.expression === undefined
+        || isQueryExpression(grouping.expression)
+      )
     )
     && value.sorting.every((sorting) =>
       isRecord(sorting)
@@ -633,6 +671,14 @@ export function queryExpressionReferencesTable(
             queryExpressionReferencesTable(ordering.expression, tableId)
           ) ?? false
         )
+    case 'window':
+      return queryExpressionReferencesTable(expression.expression, tableId)
+        || expression.partitioning.some((item) =>
+          queryExpressionReferencesTable(item, tableId)
+        )
+        || expression.ordering.some((item) =>
+          queryExpressionReferencesTable(item.expression, tableId)
+        )
     case 'subquery':
       return queryModelReferencesTable(expression.query, tableId)
     case 'case':
@@ -689,6 +735,10 @@ function queryModelReferencesTable(
     || model.joins.some((join) =>
       join.left.tableId === tableId
       || join.right.tableId === tableId
+      || (
+        join.onExpression !== undefined
+        && queryExpressionReferencesTable(join.onExpression, tableId)
+      )
       || (
         join.conditions !== undefined
         && filterNodeReferencesTable(join.conditions, tableId)

@@ -20,12 +20,19 @@ Builder。目前已明確核准並完成：
   再次儲存時，不得重建或縮減關聯圖。
 - 支援 expression、函式、`CASE WHEN`、scalar subquery、derived
   table、`UNION`／`UNION ALL`、自訂 `@parameter` 與 self JOIN。
+- 支援 GROUP BY expression、基本 Window Function
+  `OVER(PARTITION BY ... ORDER BY ...)`，以及完整複合 JOIN
+  `onExpression`。
 - 主查詢、set operation 與 derived table 子查詢可分層切換編輯。
 - Query Canvas 可整體拖曳、最大化，並匯出完整關聯圖 PNG。
 - 自訂參數可輸入、執行並持久保存於工作區；SQL 執行時必須轉為
   prepared-statement parameters，不得直接串值。
 - API 連線模式為三選一：內建資料庫連線、Laravel JWT API、Laravel
   ERP session。
+- Session 模式可由 `/fabsql/?session=<api-base>&db=<database>`
+  指定 API base 與啟動資料庫。
+- 頂端提供「在新頁籤開啟目前 URL」、瀏覽器全螢幕及環境設定 icon；
+  Canvas 或 SQL workspace 最大化時必須覆蓋頂端工具列。
 
 `/Users/jimmywon/Herd/api.jl` 是獨立 Laravel 8 專案。FabSQL Builder
 內建 Fastify API 使用目前 shared compiler；Laravel 端仍需依實際
@@ -96,6 +103,8 @@ Query Model 至少要能表達：
 - Pagination。
 - Derived tables 與 scalar subqueries。
 - `UNION`／`UNION ALL` set operations。
+- GROUP BY expressions、Window expressions 與完整 JOIN
+  `onExpression`。
 - 外層查詢參照與自訂 named parameters。
 - 原始 SQL `sourceSql`，供未改動時保留使用者排版。
 

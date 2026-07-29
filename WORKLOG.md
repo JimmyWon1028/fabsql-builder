@@ -4,7 +4,8 @@
 
 - 日期：2026-07-29
 - Branch：`main`
-- 狀態：功能與文件整理完成；發佈動作由本次工作流處理。
+- 狀態：SQL 反解析、Session 啟動參數與頂端工具列更新完成；
+  發佈動作由本次工作流處理。
 - 原則：只支援唯讀 `SELECT`；不允許 `INSERT`、`UPDATE`、`DELETE`
   或 DDL。
 - Git：`node_modules/`、`out/`、`dist/` 皆由 `.gitignore` 排除，
@@ -98,19 +99,23 @@
 ### 已處理語法
 
 - `JOIN`、`INNER JOIN`、`LEFT JOIN`、`RIGHT JOIN`。
+- 完整 `ON expression`，包含 `ON CASE ... END` 複合 JOIN。
 - Self JOIN。
 - 額外 JOIN ON 條件。
 - 函式呼叫與自訂函式名稱。
-- Literal、算術式、比較式與 unary expression。
+- Literal、算術式、比較式、`LIKE`、`NOT LIKE`、`AND`、`OR`
+  與 unary expression。
 - `CASE WHEN`。
 - Aggregate expression 與 expression 內 `ORDER BY`。
+- `ROW_NUMBER()` 等 Window Function 搭配 `PARTITION BY`／
+  `ORDER BY`，不含 named window 與 window frame。
 - Scalar subquery。
 - Derived table。
 - 外層 query reference。
 - `IN (SELECT …)`。
 - `DISTINCT`。
 - `UNION`、`UNION ALL`。
-- GROUP BY、ORDER BY、LIMIT、OFFSET。
+- GROUP BY 欄位或 expression、ORDER BY、LIMIT、OFFSET。
 - 自訂 `@parameter`。
 
 ### UNION 與子查詢導覽
@@ -186,12 +191,59 @@
 - 自訂參數、SQL 解析錯誤、執行狀態都有三語文案。
 - SQL Preview 自訂參數預設不展開。
 
+## 2026-07-29：Session 啟動參數、進階 SQL 與頂端工具列
+
+### Session URL 啟動
+
+- Session 模式支援使用
+  `/fabsql/?session=api.waysia.com/fabsql&db=wsi` 開啟。
+- `session` 只影響 Session API base；不會同時啟用其他 API
+  來源。
+- `db` 指定啟動時使用的資料庫；若未傳入則使用 API health 回傳的
+  預設資料庫。
+- `db` 不存在或無法使用時顯示提示，不會錯誤恢復另一個資料庫的
+  workspace state。
+- 新增 launch parameter 測試，涵蓋合法與無效資料庫名稱。
+
+### 進階 SQL 反解析
+
+- 支援 expression 內的 `AND`／`OR`、`LIKE`／`NOT LIKE`。
+- Filter comparison 右側可使用 `CASE ... END` expression。
+- GROUP BY 可保存與編譯完整 expression，例如
+  `GROUP BY IfNull(P.acctype, '')`。
+- Query Model 新增 Window expression，保存 function、
+  `PARTITION BY` 與 `ORDER BY`。
+- Query Join 新增 `onExpression`，複合 `ON CASE ... END` 不再被
+  縮減成錯誤的單一欄位等號。
+- Inspector 會顯示複合 JOIN 與 GROUP BY expression；改選一般
+  GROUP BY 欄位時才清除原 expression。
+- 使用本次附加的大型 SQL 實際驗證：
+  - 原始 SQL 的註解、換行、空白與排列完全不變。
+  - 外層 31 個輸出欄位解析成功。
+  - Derived table 內 3 張資料表與 2 個 JOIN 均保留。
+  - `ROW_NUMBER() OVER(...)` 與 `ON CASE ... END` 均存在於
+    Query Model。
+  - Query Model validation 為 0 個問題。
+
+### 頂端工具列與最大化
+
+- 右上角依序提供「在新頁籤開啟目前 URL」、「瀏覽器全螢幕」與
+  「環境設定」三個純 icon 按鈕。
+- 新頁籤連結保留完整 URL，以及 `session`、`db` 等 query
+  parameters。
+- 下載／載入按鈕縮短文字，移除連線狀態中的 MariaDB 版本號。
+- Query Canvas 或 SQL Preview／Query workspace 最大化時，區域從
+  viewport `top: 0` 開始並覆蓋頂端主工具列；還原與 Esc 行為不變。
+- 已在實際瀏覽器驗證兩個最大化入口 top 均為 0，z-index 均為
+  300；新頁籤與全螢幕 icon 亦完成操作驗證。
+
 ## 驗證紀錄
 
 2026-07-29 最後一輪：
 
 - `npm run typecheck`：通過。
-- `npm test`：50 tests passed。
+- `npm test`：57 tests passed（4 個根目錄測試、53 個 API／shared
+  測試）。
 - `npm run build -w @sql-builder/web`：通過。
 - 完整 distribution build：Shared、Web、API 與 production
   dependencies 收集完成；dependency audit 為 0 vulnerabilities。
@@ -208,7 +260,7 @@
 
 - 僅支援唯讀 `SELECT`。
 - 不支援多 statement。
-- CTE、HAVING、Window Function 尚未列入已驗證範圍。
+- CTE、HAVING、named window 與 window frame 尚未支援。
 - 內建 Fastify 使用最新版 shared Query Model、validation 與 compiler。
 - Laravel `api.jl` 的 QueryModelValidator／QueryModelCompiler 建立時間
   早於後續 expression、subquery、UNION 與 named parameter 擴充；

@@ -83,6 +83,15 @@ function validateExpression(
         validateExpression(ordering.expression, tableIds, issues, targetId)
       })
       return
+    case 'window':
+      validateExpression(expression.expression, tableIds, issues, targetId)
+      expression.partitioning.forEach((item) => {
+        validateExpression(item, tableIds, issues, targetId)
+      })
+      expression.ordering.forEach((item) => {
+        validateExpression(item.expression, tableIds, issues, targetId)
+      })
+      return
     case 'subquery':
       validateQueryModel(expression.query).forEach((issue) => {
         issues.push({
@@ -386,6 +395,10 @@ export function validateQueryModel(
       })
     }
 
+    if (join.onExpression) {
+      validateExpression(join.onExpression, tableIds, issues, join.id)
+    }
+
     if (join.conditions) {
       validateFilterNode(join.conditions, tableIds, issues)
     }
@@ -417,7 +430,14 @@ export function validateQueryModel(
   }
 
   model.grouping.forEach((groupingField) => {
-    if (!fieldExists(groupingField.field, tableIds)) {
+    if (groupingField.expression) {
+      validateExpression(
+        groupingField.expression,
+        tableIds,
+        issues,
+        groupingField.id
+      )
+    } else if (!fieldExists(groupingField.field, tableIds)) {
       issues.push({
         severity: 'error',
         code: 'grouping-field-invalid',
