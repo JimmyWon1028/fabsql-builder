@@ -3,7 +3,10 @@
 使用 Vue 3、TypeScript、Fastify 與 MariaDB metadata 建立的視覺化
 `SELECT` Query Builder。
 
-![FabSQL Builder 關聯圖與 SQL Preview](docs/images/fabsql-builder.jpg)
+下圖同時顯示左側 Schema Explorer 資料表清單、中央關聯圖、
+SQL Preview 與右側 Query Inspector。
+
+![FabSQL Builder 完整工作台](docs/images/fabsql-builder.jpg)
 
 目前停點：2026-07-29。最新變更與未完成事項請見
 [WORKLOG.md](./WORKLOG.md)。
